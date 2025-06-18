@@ -104,7 +104,7 @@ def create_map(roads: List[Tuple[List[Tuple[float, float]], str]], center: Tuple
         color = age_to_color(date)
         folium.PolyLine(coords, color=color, weight=4, opacity=0.9).add_to(m)
     legend_html = """
-    <div style="position: fixed; bottom: 50px; left: 50px; width: 150px; background: white; padding: 10px; border: 1px solid #ccc;">
+    <div style="position: fixed; bottom: 50px; left: 50px; width: 150px; background: white; padding: 10px; border: 1px solid #ccc; z-index: 1000;">
       <b>Image Age</b><br>
       <i style="background:#00ff00;width:10px;height:10px;display:inline-block"></i> <3 months<br>
       <i style="background:#ffff00;width:10px;height:10px;display:inline-block"></i> <1 year<br>
@@ -172,3 +172,4 @@ def main():
 
 
 if __name__ == '__main__':
+    main()
