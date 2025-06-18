@@ -3,9 +3,6 @@ import csv
 import os
 import sys
 from datetime import datetime
-from typing import List, Tuple
-
-import requests
 import folium
 
 # Default bounding box around Farsley, West Yorkshire (min_lon, min_lat, max_lon, max_lat)
@@ -38,7 +35,6 @@ def sample_grid(bbox: Tuple[float, float, float, float], step: float = 0.005) ->
             points.append((la, lo))
     return points
 
-
 def fetch_streetview_metadata(lat: float, lon: float, api_key: str) -> dict:
     url = 'https://maps.googleapis.com/maps/api/streetview/metadata'
     params = {'location': f'{lat},{lon}', 'key': api_key}
@@ -64,19 +60,6 @@ def age_to_color(date_str: str) -> str:
             return color
     return '#ff0000'
 
-
-def create_map(points: List[Tuple[float, float, str]], center: Tuple[float, float]) -> folium.Map:
-    m = folium.Map(location=center, zoom_start=14)
-    for lat, lon, date in points:
-        color = age_to_color(date)
-        folium.CircleMarker(
-            location=[lat, lon],
-            radius=4,
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.7
-        ).add_to(m)
     legend_html = """
     <div style="position: fixed; bottom: 50px; left: 50px; width: 150px; background: white; padding: 10px; border: 1px solid #ccc;">
       <b>Image Age</b><br>
@@ -106,19 +89,10 @@ def main():
         print('GOOGLE_MAPS_API_KEY environment variable not set', file=sys.stderr)
         sys.exit(1)
 
-    grid_points = sample_grid(bbox, step=args.step)
-    results = []
-    for lat, lon in grid_points:
-        data = fetch_streetview_metadata(lat, lon, api_key)
-        if data.get('status') == 'OK' and 'date' in data:
-            results.append((lat, lon, data['date']))
-
-    if not results:
         print('No imagery found')
         return
 
     center = [(bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2]
-    m = create_map(results, center)
     m.save(args.output)
     print(f'Saved {args.output}')
 
@@ -126,8 +100,6 @@ def main():
         with open(args.csv, "w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["lat", "lon", "date"])
-            for row in results:
-                writer.writerow(row)
         print(f'Saved {args.csv}')
 
 
