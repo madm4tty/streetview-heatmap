@@ -3,13 +3,12 @@ import csv
 import os
 import sys
 from datetime import datetime
+
 # typing imports are required for the type hints used throughout the
 # script.  Tuple is particularly important for function signatures
 # like ``sample_grid``.
 from typing import List, Optional, Tuple
-
 from dotenv import load_dotenv
-
 import requests
 import textwrap
 import folium
@@ -43,7 +42,6 @@ def sample_grid(bbox: Tuple[float, float, float, float], step: float = 0.005) ->
         for lo in lons:
             points.append((la, lo))
     return points
-
 
 def fetch_osm_roads(bbox: Tuple[float, float, float, float]) -> List[List[Tuple[float, float]]]:
     """Download highway geometries from the Overpass API."""
@@ -98,6 +96,7 @@ def age_to_color(date_str: str) -> str:
     return '#ff0000'
 
 
+
 def create_map(roads: List[Tuple[List[Tuple[float, float]], str]], center: Tuple[float, float]) -> folium.Map:
     """Return a Folium map with colored road segments."""
     m = folium.Map(location=center, zoom_start=14)
@@ -127,8 +126,10 @@ def main():
     parser.add_argument("--csv", default=None, help="Optional CSV output path")
     args = parser.parse_args()
 
+
     # Load environment variables from a .env file if present
     load_dotenv()
+
 
     bbox = tuple(args.bbox)
     api_key = os.environ.get('GOOGLE_MAPS_API_KEY')
@@ -162,11 +163,12 @@ def main():
         with open(args.csv, "w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["lat", "lon", "date"])
+
             for coords, date in road_results:
                 for lat, lon in coords:
                     writer.writerow([lat, lon, date])
+
         print(f'Saved {args.csv}')
 
 
 if __name__ == '__main__':
-    main()

@@ -1,5 +1,6 @@
 # streetview-heatmap
 
+
 This project experiments with visualising the age of street-level imagery. The
 included Python script queries the Google Street View metadata API and colours
 OpenStreetMap road segments according to the capture date of nearby imagery.
@@ -15,6 +16,7 @@ Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
+
 
 Create a `.env` file containing your Google Maps API key:
 
@@ -43,3 +45,4 @@ Open `heatmap.html` in a browser to view the map. Road segments are coloured
 from green (recent imagery) to red (older imagery). The bounding box and
 sampling step can be edited in the script if you wish to target different
 areas or query more detail.
+
