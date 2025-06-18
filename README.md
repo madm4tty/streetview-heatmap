@@ -1,10 +1,5 @@
 # streetview-heatmap
 
-This project experiments with visualising the age of street-level imagery. The
-included Python script queries the Google Street View metadata API and colours
-OpenStreetMap road segments according to the capture date of nearby imagery.
-The default bounding box covers Farsley, West Yorkshire.
-
 ## Requirements
 
 - Python 3.8+
@@ -18,9 +13,6 @@ pip install -r requirements.txt
 
 ## Usage
 
-`generate_heatmap.py` downloads roads from the Overpass API, queries Street View
-metadata for each road and writes `heatmap.html` by default. You can adjust the
-bounding box or sampling step using command-line options.
 
 ```bash
 export GOOGLE_MAPS_API_KEY=YOUR_KEY
@@ -31,7 +23,3 @@ python generate_heatmap.py \
   --csv results.csv
 ```
 
-Open `heatmap.html` in a browser to view the map. Road segments are coloured
-from green (recent imagery) to red (older imagery). The bounding box and
-sampling step can be edited in the script if you wish to target different
-areas or query more detail.
