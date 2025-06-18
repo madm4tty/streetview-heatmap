@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Iterable, List, Optional, Tuple
 
 import requests
+import textwrap
 import folium
 
 # Default bounding box around Farsley, West Yorkshire (min_lon, min_lat, max_lon, max_lat)
@@ -42,11 +43,13 @@ def sample_grid(bbox: Tuple[float, float, float, float], step: float = 0.005) ->
 def fetch_osm_roads(bbox: Tuple[float, float, float, float]) -> List[List[Tuple[float, float]]]:
     """Download highway geometries from the Overpass API."""
     min_lon, min_lat, max_lon, max_lat = bbox
-    query = (
-        "[out:json];\n"
-        "(way['highway']({min_lat},{min_lon},{max_lat},{max_lon}););\n"
-        "out geom;"
-    ).format(min_lat=min_lat, min_lon=min_lon, max_lat=max_lat, max_lon=max_lon)
+    query = textwrap.dedent("""
+        [out:json];
+        (
+          way['highway']({min_lat},{min_lon},{max_lat},{max_lon});
+        );
+        out geom;
+    """).format(min_lat=min_lat, min_lon=min_lon, max_lat=max_lat, max_lon=max_lon)
     url = "https://overpass-api.de/api/interpreter"
     try:
         resp = requests.get(url, params={"data": query}, timeout=60)
