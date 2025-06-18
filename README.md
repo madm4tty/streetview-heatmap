@@ -46,3 +46,6 @@ from green (recent imagery) to red (older imagery). The bounding box and
 sampling step can be edited in the script if you wish to target different
 areas or query more detail.
 
+The map includes a small legend that explains what each colour represents, so
+you can quickly interpret how recent the imagery is.
+
