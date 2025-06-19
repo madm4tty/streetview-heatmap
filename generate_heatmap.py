@@ -177,7 +177,6 @@ def generate_for_bbox(
 
     database.init_db(db_path)
     roads = fetch_osm_roads(bbox)
-
     sample_size = max(1, samples)
     missing_points: List[Tuple[float, float]] = []
     for coords in roads:
@@ -187,21 +186,25 @@ def generate_for_bbox(
 
     if missing_points:
         asyncio.run(fetch_missing_metadata(missing_points, api_key, concurrency))
-
     road_results: List[Tuple[List[Tuple[float, float]], str]] = []
     for coords in roads:
         latest: Optional[datetime] = None
         for lat, lon in sample_coords(coords, sample_size):
             date_str = database.get_metadata(lat, lon)
+            if date_str is None:
+                data = fetch_streetview_metadata(lat, lon, api_key)
+                if data.get("status") == "OK" and "date" in data:
+                    date_str = data["date"]
+                    database.save_metadata(lat, lon, date_str)
             if date_str:
                 d = parse_date(date_str)
                 if not latest or d > latest:
                     latest = d
         if latest:
-            road_results.append((coords, latest.strftime('%Y-%m-%d')))
+            road_results.append((coords, latest.strftime("%Y-%m-%d")))
 
     if not road_results:
-        print('No imagery found')
+        print("No imagery found")
         return
 
     center = [(bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2]
@@ -211,12 +214,17 @@ def generate_for_bbox(
 
     if csv_path:
         with open(csv_path, 'w', newline='') as fh:
+    print(f"Saved {output}")
+
+    if csv_path:
+        with open(csv_path, "w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(['lat', 'lon', 'date'])
 
             for coords, date in road_results:
                 for lat, lon in coords:
                     writer.writerow([lat, lon, date])
+
 
         print(f'Saved {csv_path}')
 
@@ -232,6 +240,18 @@ def main():
     parser.add_argument('--db', default=None, help='Path to metadata cache database')
     parser.add_argument('--samples', type=int, default=5, help='Max sample points per road')
     parser.add_argument('--concurrency', type=int, default=5, help='Concurrent Street View requests')
+        print(f"Saved {csv_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate Street View imagery age heatmap")
+    parser.add_argument("--bbox", type=float, nargs=4, metavar=("MIN_LON", "MIN_LAT", "MAX_LON", "MAX_LAT"),
+                        default=DEFAULT_BBOX,
+                        help="Bounding box to sample (default is Farsley)")
+    parser.add_argument("--step", type=float, default=0.005, help="Grid step size in degrees")
+    parser.add_argument("--output", default="heatmap.html", help="Output HTML file")
+    parser.add_argument("--csv", default=None, help="Optional CSV output path")
+    parser.add_argument("--db", default=None, help="Path to metadata cache database")
     args = parser.parse_args()
 
 
@@ -239,6 +259,7 @@ def main():
     load_dotenv()
 
     bbox = tuple(args.bbox)
+
     db_path = args.db or os.environ.get('HEATMAP_DB', 'metadata.db')
     api_key = os.environ.get('GOOGLE_MAPS_API_KEY')
     if not api_key:
@@ -255,6 +276,13 @@ def main():
         args.samples,
         args.concurrency,
     )
+    db_path = args.db or os.environ.get("HEATMAP_DB", "metadata.db")
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not api_key:
+        print("GOOGLE_MAPS_API_KEY environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    generate_for_bbox(bbox, args.step, args.output, args.csv, db_path, api_key)
 
 
 if __name__ == '__main__':
