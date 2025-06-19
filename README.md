@@ -57,3 +57,8 @@ wish to target different areas or query more detail.
 The map includes a small legend that explains what each colour represents, so
 you can quickly interpret how recent the imagery is.
 
+
+## Version control
+
+Temporary files such as Python bytecode caches and test artifacts are listed in `.gitignore` so they are not committed to the repository.
+
