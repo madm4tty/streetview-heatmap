@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import csv
 import os
 import sys
@@ -14,6 +15,7 @@ from dotenv import load_dotenv
 import requests
 import textwrap
 import folium
+import aiohttp
 
 # Default bounding box around Farsley, West Yorkshire (min_lon, min_lat, max_lon, max_lat)
 DEFAULT_BBOX = (-1.70, 53.79, -1.65, 53.82)
@@ -80,6 +82,49 @@ def fetch_streetview_metadata(lat: float, lon: float, api_key: str) -> dict:
     return resp.json()
 
 
+def sample_coords(coords: List[Tuple[float, float]], n: int) -> List[Tuple[float, float]]:
+    """Return up to n evenly spaced points from coords."""
+    if n <= 0 or n >= len(coords):
+        return coords
+    if n == 1:
+        return [coords[len(coords) // 2]]
+    indices = [round(i * (len(coords) - 1) / (n - 1)) for i in range(n)]
+    seen = set()
+    result = []
+    for idx in indices:
+        if idx not in seen:
+            result.append(coords[idx])
+            seen.add(idx)
+    return result
+
+
+async def fetch_missing_metadata(points: List[Tuple[float, float]], api_key: str, concurrency: int) -> None:
+    """Fetch metadata for points not already cached."""
+    if not points:
+        return
+
+    sem = asyncio.Semaphore(max(1, concurrency))
+    url = "https://maps.googleapis.com/maps/api/streetview/metadata"
+
+    async with aiohttp.ClientSession() as session:
+        async def fetch_point(lat: float, lon: float) -> None:
+            params = {"location": f"{lat},{lon}", "key": api_key}
+            try:
+                async with sem:
+                    async with session.get(url, params=params, timeout=10) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+            except Exception as exc:  # pragma: no cover - network errors
+                print(f"Error fetching {lat},{lon}: {exc}", file=sys.stderr)
+                return
+            date = data.get("date") if data.get("status") == "OK" else None
+            if date:
+                database.save_metadata(lat, lon, date)
+
+        tasks = [asyncio.create_task(fetch_point(lat, lon)) for lat, lon in points]
+        await asyncio.gather(*tasks)
+
+
 def parse_date(date_str: str) -> datetime:
     for fmt in ('%Y-%m-%d', '%Y-%m'):
         try:
@@ -125,15 +170,26 @@ def generate_for_bbox(
     csv_path: Optional[str],
     db_path: str,
     api_key: str,
+    samples: int = 5,
+    concurrency: int = 5,
 ) -> None:
     """Generate a heatmap for a single bounding box."""
 
     database.init_db(db_path)
     roads = fetch_osm_roads(bbox)
+    sample_size = max(1, samples)
+    missing_points: List[Tuple[float, float]] = []
+    for coords in roads:
+        for lat, lon in sample_coords(coords, sample_size):
+            if database.get_metadata(lat, lon) is None:
+                missing_points.append((lat, lon))
+
+    if missing_points:
+        asyncio.run(fetch_missing_metadata(missing_points, api_key, concurrency))
     road_results: List[Tuple[List[Tuple[float, float]], str]] = []
     for coords in roads:
         latest: Optional[datetime] = None
-        for lat, lon in coords:
+        for lat, lon in sample_coords(coords, sample_size):
             date_str = database.get_metadata(lat, lon)
             if date_str is None:
                 data = fetch_streetview_metadata(lat, lon, api_key)
@@ -154,17 +210,36 @@ def generate_for_bbox(
     center = [(bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2]
     m = create_map(road_results, center)
     m.save(output)
+    print(f'Saved {output}')
+
+    if csv_path:
+        with open(csv_path, 'w', newline='') as fh:
     print(f"Saved {output}")
 
     if csv_path:
         with open(csv_path, "w", newline="") as fh:
             writer = csv.writer(fh)
-            writer.writerow(["lat", "lon", "date"])
+            writer.writerow(['lat', 'lon', 'date'])
 
             for coords, date in road_results:
                 for lat, lon in coords:
                     writer.writerow([lat, lon, date])
 
+
+        print(f'Saved {csv_path}')
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Generate Street View imagery age heatmap')
+    parser.add_argument('--bbox', type=float, nargs=4, metavar=('MIN_LON', 'MIN_LAT', 'MAX_LON', 'MAX_LAT'),
+                        default=DEFAULT_BBOX,
+                        help='Bounding box to sample (default is Farsley)')
+    parser.add_argument('--step', type=float, default=0.005, help='Grid step size in degrees')
+    parser.add_argument('--output', default='heatmap.html', help='Output HTML file')
+    parser.add_argument('--csv', default=None, help='Optional CSV output path')
+    parser.add_argument('--db', default=None, help='Path to metadata cache database')
+    parser.add_argument('--samples', type=int, default=5, help='Max sample points per road')
+    parser.add_argument('--concurrency', type=int, default=5, help='Concurrent Street View requests')
         print(f"Saved {csv_path}")
 
 
@@ -184,6 +259,23 @@ def main():
     load_dotenv()
 
     bbox = tuple(args.bbox)
+
+    db_path = args.db or os.environ.get('HEATMAP_DB', 'metadata.db')
+    api_key = os.environ.get('GOOGLE_MAPS_API_KEY')
+    if not api_key:
+        print('GOOGLE_MAPS_API_KEY environment variable not set', file=sys.stderr)
+        sys.exit(1)
+
+    generate_for_bbox(
+        bbox,
+        args.step,
+        args.output,
+        args.csv,
+        db_path,
+        api_key,
+        args.samples,
+        args.concurrency,
+    )
     db_path = args.db or os.environ.get("HEATMAP_DB", "metadata.db")
     api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not api_key:
