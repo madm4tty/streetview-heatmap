@@ -273,6 +273,7 @@ def main():
         args.samples,
         args.concurrency,
     )
+    database.close_db()
 
 
 if __name__ == '__main__':

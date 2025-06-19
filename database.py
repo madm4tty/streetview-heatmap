@@ -37,3 +37,11 @@ def save_metadata(lat: float, lon: float, date: str) -> None:
     _conn.commit()
 
 
+def close_db() -> None:
+    """Close the SQLite connection if it is open."""
+    global _conn
+    if _conn is not None:
+        _conn.close()
+        _conn = None
+
+
