@@ -8,6 +8,8 @@ from datetime import datetime
 # script.  Tuple is particularly important for function signatures
 # like ``sample_grid``.
 from typing import List, Optional, Tuple
+
+import database
 from dotenv import load_dotenv
 import requests
 import textwrap
@@ -124,14 +126,16 @@ def main():
     parser.add_argument("--step", type=float, default=0.005, help="Grid step size in degrees")
     parser.add_argument("--output", default="heatmap.html", help="Output HTML file")
     parser.add_argument("--csv", default=None, help="Optional CSV output path")
+    parser.add_argument("--db", default=None, help="Path to metadata cache database")
     args = parser.parse_args()
 
 
     # Load environment variables from a .env file if present
     load_dotenv()
 
-
     bbox = tuple(args.bbox)
+    db_path = args.db or os.environ.get('HEATMAP_DB', 'metadata.db')
+    database.init_db(db_path)
     api_key = os.environ.get('GOOGLE_MAPS_API_KEY')
     if not api_key:
         print('GOOGLE_MAPS_API_KEY environment variable not set', file=sys.stderr)
@@ -142,9 +146,14 @@ def main():
     for coords in roads:
         latest: Optional[datetime] = None
         for lat, lon in coords:
-            data = fetch_streetview_metadata(lat, lon, api_key)
-            if data.get('status') == 'OK' and 'date' in data:
-                d = parse_date(data['date'])
+            date_str = database.get_metadata(lat, lon)
+            if date_str is None:
+                data = fetch_streetview_metadata(lat, lon, api_key)
+                if data.get('status') == 'OK' and 'date' in data:
+                    date_str = data['date']
+                    database.save_metadata(lat, lon, date_str)
+            if date_str:
+                d = parse_date(date_str)
                 if not latest or d > latest:
                     latest = d
         if latest:
