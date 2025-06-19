@@ -77,8 +77,15 @@ def fetch_osm_roads(bbox: Tuple[float, float, float, float]) -> List[List[Tuple[
 def fetch_streetview_metadata(lat: float, lon: float, api_key: str) -> dict:
     url = 'https://maps.googleapis.com/maps/api/streetview/metadata'
     params = {'location': f'{lat},{lon}', 'key': api_key}
-    resp = requests.get(url, params=params, timeout=10)
-    resp.raise_for_status()
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        print(
+            f"Error fetching Street View metadata for {lat},{lon}: {exc}",
+            file=sys.stderr,
+        )
+        return {}
     return resp.json()
 
 
@@ -193,6 +200,8 @@ def generate_for_bbox(
             date_str = database.get_metadata(lat, lon)
             if date_str is None:
                 data = fetch_streetview_metadata(lat, lon, api_key)
+                if not data:
+                    continue
                 if data.get("status") == "OK" and "date" in data:
                     date_str = data["date"]
                     database.save_metadata(lat, lon, date_str)
