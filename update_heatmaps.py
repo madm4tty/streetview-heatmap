@@ -9,6 +9,7 @@ from typing import List, Tuple
 from dotenv import load_dotenv
 
 import generate_heatmap
+import database
 
 
 def _coord_bounds(coords) -> Tuple[float, float, float, float]:
@@ -86,6 +87,8 @@ def process(boxes: List[Tuple[float, float, float, float]], args) -> None:
         logging.info('Waiting %s seconds before next update', args.interval)
         start = 0
         time.sleep(args.interval)
+
+    database.close_db()
 
 
 def main():
