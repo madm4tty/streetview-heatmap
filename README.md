@@ -33,8 +33,7 @@ cache. You can also specify this using the `--db` command-line option.
 
 `generate_heatmap.py` downloads roads from the Overpass API, queries Street View
 metadata for each road and writes `heatmap.html` by default. You can adjust the
-bounding box, sampling step, the number of samples per road and the request
-concurrency using command-line options.
+bounding box, sampling step, the number of samples per road and the request concurrency using command-line options.
 
 ```bash
 export GOOGLE_MAPS_API_KEY=YOUR_KEY
@@ -50,8 +49,8 @@ python generate_heatmap.py \
 
 Open `heatmap.html` in a browser to view the map. Road segments are coloured
 from green (recent imagery) to red (older imagery). The bounding box,
-sampling step, sample count and concurrency can be edited in the script if you
-wish to target different areas or query more detail.
+sampling step, sample count and concurrency can be edited in the script if you wish to target different
+areas or query more detail.
 
 The map includes a small legend that explains what each colour represents, so
 you can quickly interpret how recent the imagery is.
