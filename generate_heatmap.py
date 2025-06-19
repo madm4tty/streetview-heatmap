@@ -29,7 +29,13 @@ AGE_COLORS = [
 
 
 def sample_grid(bbox: Tuple[float, float, float, float], step: float = 0.005) -> List[Tuple[float, float]]:
-    """Return a list of (lat, lon) points within bbox at the given step."""
+    """Return a list of (lat, lon) points within ``bbox`` at ``step`` degree increments.
+
+    ``step`` must be a positive number. A ``ValueError`` is raised for ``step``
+    values less than or equal to zero.
+    """
+    if step <= 0:
+        raise ValueError("step must be positive")
     min_lon, min_lat, max_lon, max_lat = bbox
     lats = []
     lat = min_lat
