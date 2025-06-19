@@ -118,6 +118,56 @@ def create_map(roads: List[Tuple[List[Tuple[float, float]], str]], center: Tuple
     return m
 
 
+def generate_for_bbox(
+    bbox: Tuple[float, float, float, float],
+    step: float,
+    output: str,
+    csv_path: Optional[str],
+    db_path: str,
+    api_key: str,
+) -> None:
+    """Generate a heatmap for a single bounding box."""
+
+    database.init_db(db_path)
+    roads = fetch_osm_roads(bbox)
+    road_results: List[Tuple[List[Tuple[float, float]], str]] = []
+    for coords in roads:
+        latest: Optional[datetime] = None
+        for lat, lon in coords:
+            date_str = database.get_metadata(lat, lon)
+            if date_str is None:
+                data = fetch_streetview_metadata(lat, lon, api_key)
+                if data.get("status") == "OK" and "date" in data:
+                    date_str = data["date"]
+                    database.save_metadata(lat, lon, date_str)
+            if date_str:
+                d = parse_date(date_str)
+                if not latest or d > latest:
+                    latest = d
+        if latest:
+            road_results.append((coords, latest.strftime("%Y-%m-%d")))
+
+    if not road_results:
+        print("No imagery found")
+        return
+
+    center = [(bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2]
+    m = create_map(road_results, center)
+    m.save(output)
+    print(f"Saved {output}")
+
+    if csv_path:
+        with open(csv_path, "w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["lat", "lon", "date"])
+
+            for coords, date in road_results:
+                for lat, lon in coords:
+                    writer.writerow([lat, lon, date])
+
+        print(f"Saved {csv_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate Street View imagery age heatmap")
     parser.add_argument("--bbox", type=float, nargs=4, metavar=("MIN_LON", "MIN_LAT", "MAX_LON", "MAX_LAT"),
@@ -134,50 +184,13 @@ def main():
     load_dotenv()
 
     bbox = tuple(args.bbox)
-    db_path = args.db or os.environ.get('HEATMAP_DB', 'metadata.db')
-    database.init_db(db_path)
-    api_key = os.environ.get('GOOGLE_MAPS_API_KEY')
+    db_path = args.db or os.environ.get("HEATMAP_DB", "metadata.db")
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not api_key:
-        print('GOOGLE_MAPS_API_KEY environment variable not set', file=sys.stderr)
+        print("GOOGLE_MAPS_API_KEY environment variable not set", file=sys.stderr)
         sys.exit(1)
 
-    roads = fetch_osm_roads(bbox)
-    road_results: List[Tuple[List[Tuple[float, float]], str]] = []
-    for coords in roads:
-        latest: Optional[datetime] = None
-        for lat, lon in coords:
-            date_str = database.get_metadata(lat, lon)
-            if date_str is None:
-                data = fetch_streetview_metadata(lat, lon, api_key)
-                if data.get('status') == 'OK' and 'date' in data:
-                    date_str = data['date']
-                    database.save_metadata(lat, lon, date_str)
-            if date_str:
-                d = parse_date(date_str)
-                if not latest or d > latest:
-                    latest = d
-        if latest:
-            road_results.append((coords, latest.strftime('%Y-%m-%d')))
-
-    if not road_results:
-        print('No imagery found')
-        return
-
-    center = [(bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2]
-    m = create_map(road_results, center)
-    m.save(args.output)
-    print(f'Saved {args.output}')
-
-    if args.csv:
-        with open(args.csv, "w", newline="") as fh:
-            writer = csv.writer(fh)
-            writer.writerow(["lat", "lon", "date"])
-
-            for coords, date in road_results:
-                for lat, lon in coords:
-                    writer.writerow([lat, lon, date])
-
-        print(f'Saved {args.csv}')
+    generate_for_bbox(bbox, args.step, args.output, args.csv, db_path, api_key)
 
 
 if __name__ == '__main__':
