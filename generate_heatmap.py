@@ -213,33 +213,14 @@ def generate_for_bbox(
     print(f'Saved {output}')
 
     if csv_path:
-        with open(csv_path, 'w', newline='') as fh:
-    print(f"Saved {output}")
-
-    if csv_path:
         with open(csv_path, "w", newline="") as fh:
             writer = csv.writer(fh)
-            writer.writerow(['lat', 'lon', 'date'])
+            writer.writerow(["lat", "lon", "date"])
 
             for coords, date in road_results:
                 for lat, lon in coords:
                     writer.writerow([lat, lon, date])
 
-
-        print(f'Saved {csv_path}')
-
-
-def main():
-    parser = argparse.ArgumentParser(description='Generate Street View imagery age heatmap')
-    parser.add_argument('--bbox', type=float, nargs=4, metavar=('MIN_LON', 'MIN_LAT', 'MAX_LON', 'MAX_LAT'),
-                        default=DEFAULT_BBOX,
-                        help='Bounding box to sample (default is Farsley)')
-    parser.add_argument('--step', type=float, default=0.005, help='Grid step size in degrees')
-    parser.add_argument('--output', default='heatmap.html', help='Output HTML file')
-    parser.add_argument('--csv', default=None, help='Optional CSV output path')
-    parser.add_argument('--db', default=None, help='Path to metadata cache database')
-    parser.add_argument('--samples', type=int, default=5, help='Max sample points per road')
-    parser.add_argument('--concurrency', type=int, default=5, help='Concurrent Street View requests')
         print(f"Saved {csv_path}")
 
 
@@ -252,18 +233,19 @@ def main():
     parser.add_argument("--output", default="heatmap.html", help="Output HTML file")
     parser.add_argument("--csv", default=None, help="Optional CSV output path")
     parser.add_argument("--db", default=None, help="Path to metadata cache database")
+    parser.add_argument("--samples", type=int, default=5, help="Max sample points per road")
+    parser.add_argument("--concurrency", type=int, default=5, help="Concurrent Street View requests")
     args = parser.parse_args()
-
 
     # Load environment variables from a .env file if present
     load_dotenv()
 
     bbox = tuple(args.bbox)
 
-    db_path = args.db or os.environ.get('HEATMAP_DB', 'metadata.db')
-    api_key = os.environ.get('GOOGLE_MAPS_API_KEY')
+    db_path = args.db or os.environ.get("HEATMAP_DB", "metadata.db")
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not api_key:
-        print('GOOGLE_MAPS_API_KEY environment variable not set', file=sys.stderr)
+        print("GOOGLE_MAPS_API_KEY environment variable not set", file=sys.stderr)
         sys.exit(1)
 
     generate_for_bbox(
@@ -276,13 +258,6 @@ def main():
         args.samples,
         args.concurrency,
     )
-    db_path = args.db or os.environ.get("HEATMAP_DB", "metadata.db")
-    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
-    if not api_key:
-        print("GOOGLE_MAPS_API_KEY environment variable not set", file=sys.stderr)
-        sys.exit(1)
-
-    generate_for_bbox(bbox, args.step, args.output, args.csv, db_path, api_key)
 
 
 if __name__ == '__main__':
