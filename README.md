@@ -34,7 +34,8 @@ cache. You can also specify this using the `--db` command-line option.
 `generate_heatmap.py` downloads roads from the Overpass API, queries Street View
 metadata for each road and writes `heatmap.html` by default. You can adjust the
 bounding box, sampling step, the number of samples per road and the request
-concurrency using command-line options.
+concurrency using command-line options. The step value determines the spacing of
+the grid of points used to query Street View. It must be a positive number.
 
 ```bash
 export GOOGLE_MAPS_API_KEY=YOUR_KEY
