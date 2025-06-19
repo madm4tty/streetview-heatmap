@@ -10,6 +10,7 @@ The default bounding box covers Farsley, West Yorkshire.
 
 - Python 3.8+
 - A Google Maps API key (`GOOGLE_MAPS_API_KEY` environment variable)
+- Optional SQLite database path (`HEATMAP_DB` environment variable)
 
 Install dependencies:
 
@@ -25,6 +26,8 @@ echo "GOOGLE_MAPS_API_KEY=YOUR_KEY" > .env
 ```
 
 The script uses `python-dotenv` to load this file automatically when running.
+If `HEATMAP_DB` is set, it will be used as the path for a SQLite database
+cache. You can also specify this using the `--db` command-line option.
 
 ## Usage
 
@@ -38,7 +41,8 @@ python generate_heatmap.py \
   --bbox -1.70 53.79 -1.65 53.82 \
   --step 0.005 \
   --output heatmap.html \
-  --csv results.csv
+  --csv results.csv \
+  --db metadata.db
 ```
 
 Open `heatmap.html` in a browser to view the map. Road segments are coloured
