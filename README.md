@@ -9,7 +9,9 @@ The default bounding box covers Farsley, West Yorkshire.
 ## Requirements
 
 - Python 3.8+
-- A Google Maps API key (`GOOGLE_MAPS_API_KEY` environment variable)
+- A Google Maps API key (`GOOGLE_MAPS_API_KEY` environment variable). If you are
+  using GitHub Codespaces, a secret called `GMAPS_APIKEY` will also be detected
+  automatically.
 - Optional SQLite database path (`HEATMAP_DB` environment variable)
 
 Install dependencies:
@@ -19,7 +21,8 @@ pip install -r requirements.txt
 ```
 
 
-Create a `.env` file containing your Google Maps API key:
+Create a `.env` file containing your Google Maps API key if you are running the
+scripts locally:
 
 ```bash
 echo "GOOGLE_MAPS_API_KEY=YOUR_KEY" > .env
@@ -56,6 +59,18 @@ wish to target different areas or query more detail.
 
 The map includes a small legend that explains what each colour represents, so
 you can quickly interpret how recent the imagery is.
+
+`update_heatmaps.py` processes multiple bounding boxes from a JSON or GeoJSON
+file. It repeatedly generates heatmaps for each box and can run at regular
+intervals.
+
+```bash
+python update_heatmaps.py \
+  --bbox-file boxes.json \
+  --output-dir output \
+  --step 0.005 \
+  --interval 86400
+```
 
 
 ## Version control
