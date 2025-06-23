@@ -105,6 +105,14 @@ def main():
 
     logging.basicConfig(level=getattr(logging, args.log_level.upper()))
     load_dotenv()
+
+    api_key_env = os.getenv("GMAPS_APIKEY")
+    if api_key_env:
+        print("API key loaded")
+        os.environ.setdefault("GOOGLE_MAPS_API_KEY", api_key_env)
+    else:
+        print("API key not found")
+
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     if args.csv_dir:
         Path(args.csv_dir).mkdir(parents=True, exist_ok=True)

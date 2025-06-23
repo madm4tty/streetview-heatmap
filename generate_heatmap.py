@@ -255,6 +255,13 @@ def main():
     # Load environment variables from a .env file if present
     load_dotenv()
 
+    api_key_env = os.getenv("GMAPS_APIKEY")
+    if api_key_env:
+        print("API key loaded")
+        os.environ.setdefault("GOOGLE_MAPS_API_KEY", api_key_env)
+    else:
+        print("API key not found")
+
     bbox = tuple(args.bbox)
 
     db_path = args.db or os.environ.get("HEATMAP_DB", "metadata.db")
