@@ -62,7 +62,8 @@ sampling step, sample count and concurrency can be edited in the script if you
 wish to target different areas or query more detail.
 
 The map includes a small legend that explains what each colour represents, so
-you can quickly interpret how recent the imagery is.
+you can quickly interpret how recent the imagery is. Hover over a road segment
+to see its name and the Street View capture date.
 
 `update_heatmaps.py` processes multiple bounding boxes from a JSON or GeoJSON
 file. It repeatedly generates heatmaps for each box and can run at regular
