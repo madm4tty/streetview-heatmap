@@ -53,8 +53,10 @@ def sample_grid(bbox: Tuple[float, float, float, float], step: float = 0.005) ->
             points.append((la, lo))
     return points
 
-def fetch_osm_roads(bbox: Tuple[float, float, float, float]) -> List[List[Tuple[float, float]]]:
-    """Download highway geometries from the Overpass API."""
+def fetch_osm_roads(
+    bbox: Tuple[float, float, float, float]
+) -> List[Tuple[List[Tuple[float, float]], Optional[str]]]:
+    """Download highway geometries and names from the Overpass API."""
     min_lon, min_lat, max_lon, max_lat = bbox
     query = textwrap.dedent("""
         [out:json];
@@ -76,7 +78,11 @@ def fetch_osm_roads(bbox: Tuple[float, float, float, float]) -> List[List[Tuple[
         geom = elem.get("geometry")
         if geom:
             coords = [(pt["lat"], pt["lon"]) for pt in geom]
-            roads.append(coords)
+            name = None
+            tags = elem.get("tags")
+            if tags:
+                name = tags.get("name")
+            roads.append((coords, name))
     return roads
 
 
@@ -157,12 +163,25 @@ def age_to_color(date_str: str) -> str:
 
 
 
-def create_map(roads: List[Tuple[List[Tuple[float, float]], str]], center: Tuple[float, float]) -> folium.Map:
-    """Return a Folium map with colored road segments."""
+def create_map(
+    roads: List[Tuple[List[Tuple[float, float]], str, Optional[str]]],
+    center: Tuple[float, float],
+) -> folium.Map:
+    """Return a Folium map with colored road segments and tooltips."""
     m = folium.Map(location=center, zoom_start=14)
-    for coords, date in roads:
+    for coords, date, name in roads:
         color = age_to_color(date)
-        folium.PolyLine(coords, color=color, weight=4, opacity=0.9).add_to(m)
+        tooltip = None
+        try:
+            tooltip_date = parse_date(date).strftime("%d/%m/%Y")
+        except ValueError:
+            tooltip_date = date
+        if name or tooltip_date:
+            road_name = name if name else "Unknown"
+            tooltip = f"{road_name}<br>{tooltip_date}"
+        folium.PolyLine(
+            coords, color=color, weight=4, opacity=0.9, tooltip=tooltip
+        ).add_to(m)
     legend_html = """
     <div style="position: fixed; bottom: 50px; left: 50px; width: 150px; background: white; padding: 10px; border: 1px solid #ccc; z-index: 1000;">
       <b>Image Age</b><br>
@@ -192,15 +211,15 @@ def generate_for_bbox(
     roads = fetch_osm_roads(bbox)
     sample_size = max(1, samples)
     missing_points: List[Tuple[float, float]] = []
-    for coords in roads:
+    for coords, _ in roads:
         for lat, lon in sample_coords(coords, sample_size):
             if database.get_metadata(lat, lon) is None:
                 missing_points.append((lat, lon))
 
     if missing_points:
         asyncio.run(fetch_missing_metadata(missing_points, api_key, concurrency))
-    road_results: List[Tuple[List[Tuple[float, float]], str]] = []
-    for coords in roads:
+    road_results: List[Tuple[List[Tuple[float, float]], str, Optional[str]]] = []
+    for coords, name in roads:
         latest: Optional[datetime] = None
         for lat, lon in sample_coords(coords, sample_size):
             date_str = database.get_metadata(lat, lon)
@@ -216,7 +235,7 @@ def generate_for_bbox(
                 if not latest or d > latest:
                     latest = d
         if latest:
-            road_results.append((coords, latest.strftime("%Y-%m-%d")))
+            road_results.append((coords, latest.strftime("%Y-%m-%d"), name))
 
     if not road_results:
         print("No imagery found")
@@ -232,7 +251,7 @@ def generate_for_bbox(
             writer = csv.writer(fh)
             writer.writerow(["lat", "lon", "date"])
 
-            for coords, date in road_results:
+            for coords, date, _ in road_results:
                 for lat, lon in coords:
                     writer.writerow([lat, lon, date])
 
