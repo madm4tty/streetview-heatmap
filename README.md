@@ -20,6 +20,10 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+Run this command before executing `generate_heatmap.py` or
+`update_heatmaps.py` to ensure all required packages (such as `aiohttp`) are
+available.
+
 
 Create a `.env` file containing your Google Maps API key if you are running the
 scripts locally:
