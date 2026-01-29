@@ -7,6 +7,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      GMAPS_APIKEY: ${{ secrets.GMAPS_APIKEY_REPO }}
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
