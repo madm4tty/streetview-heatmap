@@ -18,3 +18,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - run: pytest
+      - name: Test API Key
+        run: python test_api_key.py
