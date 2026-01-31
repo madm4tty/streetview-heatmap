@@ -9,18 +9,40 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import aiohttp
+import certifi
 import folium
 import requests
+import ssl
 import textwrap
 from dotenv import load_dotenv
 
 import database
 
-# Configure logging
+# Configure logging - both console and file
+LOG_FILE = "heatmap_generation.log"
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(console_formatter)
+
+# File handler (overwrites each time)
+file_handler = logging.FileHandler(LOG_FILE, mode='w', encoding='utf-8')
+file_handler.setLevel(logging.DEBUG)
+file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(funcName)s - %(message)s")
+file_handler.setFormatter(file_formatter)
+# Ensure immediate flushing
+import sys
+sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
+
+# Configure root logger - this applies to all loggers
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[console_handler, file_handler]
 )
+
 logger = logging.getLogger(__name__)
 
 # Default bounding box around Farsley, West Yorkshire (min_lon, min_lat, max_lon, max_lat)
@@ -78,6 +100,7 @@ def fetch_osm_roads(
     Returns:
         List of (coordinates, name, highway_type) tuples
     """
+    logger.info("Fetching OSM roads from bounding box: %s", bbox)
     min_lon, min_lat, max_lon, max_lat = bbox
     query = textwrap.dedent(
         """
@@ -89,6 +112,7 @@ def fetch_osm_roads(
     """
     ).format(min_lat=min_lat, min_lon=min_lon, max_lat=max_lat, max_lon=max_lon)
     url = "https://overpass-api.de/api/interpreter"
+    logger.debug("Overpass query: %s", query.strip())
 
     for attempt in range(retries):
         try:
@@ -112,6 +136,7 @@ def fetch_osm_roads(
 
     data = resp.json()
     roads = []
+    highway_type_counts = {}
     for elem in data.get("elements", []):
         geom = elem.get("geometry")
         if geom:
@@ -120,8 +145,11 @@ def fetch_osm_roads(
             name = tags.get("name")
             highway_type = tags.get("highway")
             roads.append((coords, name, highway_type))
+            # Track road types
+            highway_type_counts[highway_type] = highway_type_counts.get(highway_type, 0) + 1
 
     logger.info("Fetched %d roads from Overpass API", len(roads))
+    logger.debug("Road type distribution: %s", dict(sorted(highway_type_counts.items(), key=lambda x: x[1], reverse=True)))
     return roads
 
 
@@ -181,19 +209,28 @@ async def fetch_missing_metadata(
     Also saves results to database in batches.
     """
     if not points:
+        logger.debug("No missing points to fetch")
         return {}
 
     # Deduplicate points
     unique_points = list(set(points))
     logger.info("Fetching metadata for %d unique points (concurrency=%d)", len(unique_points), concurrency)
+    start_time = time.time()
 
     sem = asyncio.Semaphore(max(1, concurrency))
     url = "https://maps.googleapis.com/maps/api/streetview/metadata"
     results: Dict[Tuple[float, float], Optional[str]] = {}
     batch_to_save: List[Tuple[float, float, str]] = []
     batch_lock = asyncio.Lock()
+    completed_count = [0]  # Use list for mutable counter in async context
+    last_log_time = [time.time()]
+    status_counts = {}  # Track API response statuses
 
-    async with aiohttp.ClientSession() as session:
+    # Create SSL context using certifi's CA bundle
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    async with aiohttp.ClientSession(connector=connector) as session:
 
         async def fetch_point(lat: float, lon: float) -> None:
             params = {"location": f"{lat},{lon}", "key": api_key}
@@ -203,12 +240,40 @@ async def fetch_missing_metadata(
                         resp.raise_for_status()
                         data = await resp.json()
             except Exception as exc:
-                logger.debug("Error fetching %s,%s: %s", lat, lon, exc)
+                logger.warning("Error fetching %s,%s: %s (type: %s)", lat, lon, exc, type(exc).__name__)
                 results[(lat, lon)] = None
+                completed_count[0] += 1
+                # Track errors
+                async with batch_lock:
+                    status_counts["ERROR"] = status_counts.get("ERROR", 0) + 1
+                # Log progress every 5 seconds
+                if time.time() - last_log_time[0] >= 5:
+                    logger.info("Progress: %d/%d points fetched (%.1f%%)",
+                               completed_count[0], len(unique_points),
+                               (completed_count[0] / len(unique_points) * 100))
+                    last_log_time[0] = time.time()
                 return
 
-            date = data.get("date") if data.get("status") == "OK" else None
+            status = data.get("status")
+            date = data.get("date") if status == "OK" else None
             results[(lat, lon)] = date
+            completed_count[0] += 1
+
+            # Track status codes
+            async with batch_lock:
+                status_counts[status] = status_counts.get(status, 0) + 1
+
+            # Debug: log unexpected statuses
+            if status != "OK":
+                logger.debug("Point %s,%s returned status: %s (data: %s)", lat, lon, status, data)
+
+            # Log progress every 5 seconds
+            if time.time() - last_log_time[0] >= 5:
+                logger.info("Progress: %d/%d points fetched (%.1f%%)",
+                           completed_count[0], len(unique_points),
+                           (completed_count[0] / len(unique_points) * 100))
+                last_log_time[0] = time.time()
+
             if date:
                 async with batch_lock:
                     batch_to_save.append((lat, lon, date))
@@ -216,16 +281,26 @@ async def fetch_missing_metadata(
                     if len(batch_to_save) >= 100:
                         entries = batch_to_save.copy()
                         batch_to_save.clear()
-                        database.save_metadata_batch(entries)
+                        # Run database save in thread pool to avoid blocking
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(None, database.save_metadata_batch, entries)
+                        logger.debug("Saved batch of 100 entries to database")
 
+        logger.debug("Creating %d async tasks...", len(unique_points))
         tasks = [asyncio.create_task(fetch_point(lat, lon)) for lat, lon in unique_points]
-        await asyncio.gather(*tasks)
+        logger.debug("Gathering results...")
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     # Save any remaining entries
     if batch_to_save:
         database.save_metadata_batch(batch_to_save)
 
-    logger.info("Fetched %d results, %d with dates", len(results), sum(1 for v in results.values() if v))
+    elapsed = time.time() - start_time
+    results_with_dates = sum(1 for v in results.values() if v)
+    logger.info("Fetched %d results, %d with dates in %.1fs (%.1f points/sec)",
+                len(results), results_with_dates, elapsed, len(results) / elapsed if elapsed > 0 else 0)
+    logger.info("API response status distribution: %s", status_counts)
+    logger.debug("Success rate: %.1f%%", (results_with_dates / len(results) * 100) if results else 0)
     return results
 
 
@@ -241,8 +316,11 @@ def parse_date(date_str: str) -> datetime:
 
 def age_to_color(date_str: str) -> str:
     """Convert date string to color based on age."""
+    from datetime import timezone
     capture_date = parse_date(date_str)
-    age_days = (datetime.utcnow() - capture_date).days
+    # Use timezone-aware datetime
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    age_days = (now_utc - capture_date).days
     for limit, color in AGE_COLORS:
         if age_days <= limit:
             return color
@@ -305,7 +383,19 @@ def generate_for_bbox(
         concurrency: Maximum concurrent API requests
         adaptive_sampling: Whether to adjust samples based on road importance
     """
+    logger.info("=" * 60)
+    logger.info("Starting heatmap generation")
+    logger.info("Bounding box: %s", bbox)
+    logger.info("Output file: %s", output)
+    logger.info("Database: %s", db_path)
+    logger.info("Base samples per road: %d", samples)
+    logger.info("Concurrency: %d", concurrency)
+    logger.info("Adaptive sampling: %s", adaptive_sampling)
+    logger.info("=" * 60)
+
+    start_time = time.time()
     database.init_db(db_path)
+    logger.debug("Database initialized")
     roads = fetch_osm_roads(bbox)
 
     if not roads:
@@ -315,8 +405,10 @@ def generate_for_bbox(
     sample_size = max(1, samples)
 
     # Pre-compute sampled coordinates for each road (avoid sampling twice)
+    logger.info("Sampling points from roads...")
     road_samples: List[Tuple[List[Tuple[float, float]], Optional[str], Optional[str], List[Tuple[float, float]]]] = []
     all_sample_points: List[Tuple[float, float]] = []
+    sampling_stats = {"total_samples": 0, "min_samples": float('inf'), "max_samples": 0}
 
     for coords, name, highway_type in roads:
         if adaptive_sampling:
@@ -327,6 +419,16 @@ def generate_for_bbox(
         road_samples.append((coords, name, highway_type, sampled))
         all_sample_points.extend(sampled)
 
+        # Track stats
+        sampling_stats["total_samples"] += len(sampled)
+        sampling_stats["min_samples"] = min(sampling_stats["min_samples"], len(sampled))
+        sampling_stats["max_samples"] = max(sampling_stats["max_samples"], len(sampled))
+
+    avg_samples = sampling_stats["total_samples"] / len(roads) if roads else 0
+    logger.info("Sampling complete: %d total points (avg: %.1f, min: %d, max: %d per road)",
+                sampling_stats["total_samples"], avg_samples,
+                sampling_stats["min_samples"], sampling_stats["max_samples"])
+
     # Deduplicate all sample points
     unique_points = list(set(all_sample_points))
     logger.info(
@@ -336,11 +438,14 @@ def generate_for_bbox(
     )
 
     # Batch query cache for all points at once
+    logger.info("Querying database cache for %d points...", len(unique_points))
     cached = database.get_metadata_batch(unique_points)
 
     # Find points not in cache
     missing_points = [p for p in unique_points if cached.get(p) is None]
-    logger.info("Cache hit: %d, Cache miss: %d", len(unique_points) - len(missing_points), len(missing_points))
+    cache_hit_rate = ((len(unique_points) - len(missing_points)) / len(unique_points) * 100) if unique_points else 0
+    logger.info("Cache hit: %d (%.1f%%), Cache miss: %d",
+                len(unique_points) - len(missing_points), cache_hit_rate, len(missing_points))
 
     # Fetch missing points asynchronously
     if missing_points:
@@ -349,8 +454,13 @@ def generate_for_bbox(
         cached.update(fetched)
 
     # Process results - find latest date for each road
+    logger.info("Processing results to find latest imagery date per road...")
     road_results: List[Tuple[List[Tuple[float, float]], str, Optional[str]]] = []
+    roads_processed = 0
     for coords, name, highway_type, sampled in road_samples:
+        roads_processed += 1
+        if roads_processed % 100 == 0:
+            logger.debug("Processed %d/%d roads...", roads_processed, len(road_samples))
         latest: Optional[datetime] = None
         for lat, lon in sampled:
             # Round to match database precision
@@ -377,28 +487,40 @@ def generate_for_bbox(
         logger.warning("No imagery found for any roads")
         return
 
-    logger.info("Generated results for %d/%d roads", len(road_results), len(roads))
+    logger.info("Generated results for %d/%d roads (%.1f%% coverage)",
+                len(road_results), len(roads),
+                (len(road_results) / len(roads) * 100) if roads else 0)
 
+    logger.info("Creating map visualization...")
     center = [(bbox[1] + bbox[3]) / 2, (bbox[0] + bbox[2]) / 2]
     m = create_map(road_results, center)
     m.save(output)
-    logger.info("Saved %s", output)
+    logger.info("Saved map to %s", output)
 
     if csv_path:
+        logger.info("Writing CSV data...")
         with open(csv_path, "w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["lat", "lon", "date", "road_name"])
+            row_count = 0
             for coords, date, name in road_results:
                 for lat, lon in coords:
                     writer.writerow([lat, lon, date, name or ""])
-        logger.info("Saved %s", csv_path)
+                    row_count += 1
+        logger.info("Saved CSV to %s (%d rows)", csv_path, row_count)
 
     # Log cache statistics
     stats = database.get_cache_stats()
     logger.info("Cache stats: %d total entries, %d with dates", stats["total_entries"], stats["entries_with_date"])
 
+    total_time = time.time() - start_time
+    logger.info("=" * 60)
+    logger.info("Heatmap generation complete in %.1fs", total_time)
+    logger.info("=" * 60)
+
 
 def main():
+    logger.info("Street View Heatmap Generator started")
     parser = argparse.ArgumentParser(
         description="Generate Street View imagery age heatmap"
     )
@@ -472,6 +594,9 @@ def main():
         adaptive_sampling=not args.no_adaptive,
     )
     database.close_db()
+
+    # Ensure logs are flushed
+    logging.shutdown()
 
 
 if __name__ == "__main__":
