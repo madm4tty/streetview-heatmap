@@ -3,3 +3,4 @@ folium
 python-dotenv
 aiohttp
 pytest
+psycopg2-binary

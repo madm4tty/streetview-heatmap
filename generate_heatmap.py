@@ -332,7 +332,30 @@ def create_map(
     center: Tuple[float, float],
 ) -> folium.Map:
     """Return a Folium map with colored road segments and tooltips."""
-    m = folium.Map(location=center, zoom_start=14)
+    # Start with a dark basemap
+    m = folium.Map(
+        location=center,
+        zoom_start=14,
+        tiles='CartoDB dark_matter',
+        attr='CartoDB'
+    )
+
+    # Add alternative basemap options
+    folium.TileLayer(
+        tiles='OpenStreetMap',
+        name='OpenStreetMap',
+        attr='OpenStreetMap'
+    ).add_to(m)
+
+    folium.TileLayer(
+        tiles='CartoDB positron',
+        name='CartoDB Light',
+        attr='CartoDB'
+    ).add_to(m)
+
+    # Add road overlay as a feature group so it stays visible when switching basemaps
+    road_layer = folium.FeatureGroup(name='Street View Age', show=True)
+
     for coords, date, name in roads:
         color = age_to_color(date)
         tooltip = None
@@ -345,7 +368,13 @@ def create_map(
             tooltip = f"{road_name}<br>{tooltip_date}"
         folium.PolyLine(
             coords, color=color, weight=4, opacity=0.9, tooltip=tooltip
-        ).add_to(m)
+        ).add_to(road_layer)
+
+    road_layer.add_to(m)
+
+    # Add layer control to switch between basemaps
+    folium.LayerControl(position='topright').add_to(m)
+
     legend_html = """
     <div style="position: fixed; bottom: 50px; left: 50px; width: 150px; background: white; padding: 10px; border: 1px solid #ccc; z-index: 1000;">
       <b>Image Age</b><br>
