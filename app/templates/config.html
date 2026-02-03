@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}Configuration - Street View Heatmap{% endblock %}
+
+{% block main_class %}main-page{% endblock %}
+
+{% block content %}
+<div class="container">
+    <!-- Page Header -->
+    <div class="page-header d-flex justify-between align-center flex-wrap gap-md">
+        <div>
+            <h1 class="page-title">Configuration</h1>
+            <p class="page-subtitle">Manage scheduler and update settings</p>
+        </div>
+        <div id="auth-status">
+            <!-- Auth status badge will be inserted here -->
+        </div>
+    </div>
+
+    <!-- Authentication Alert -->
+    <div class="alert alert-info mb-lg" id="auth-alert">
+        <strong>Authentication Required:</strong> You need to enter your API key to modify configuration settings.
+        <button class="btn btn-sm btn-primary ml-sm" id="auth-btn">Authenticate</button>
+    </div>
+
+    <!-- Configuration Form -->
+    <form id="config-form">
+        <div class="grid grid-2">
+            <!-- Scheduler Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Scheduler Settings</h2>
+                    <p class="card-subtitle">Control automatic update scheduling</p>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="scheduler-enabled" name="scheduler_enabled">
+                            <label class="form-check-label" for="scheduler-enabled">
+                                <strong>Enable Scheduler</strong>
+                            </label>
+                        </div>
+                        <p class="form-help">When enabled, updates will run automatically at the specified interval</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="interval-hours">Update Interval</label>
+                        <div class="input-group" style="max-width: 200px;">
+                            <input type="number" class="form-input" id="interval-hours" name="interval_hours" min="1" max="168" value="24">
+                            <span class="btn btn-secondary" style="pointer-events: none;">hours</span>
+                        </div>
+                        <p class="form-help">How often to run automatic updates (1-168 hours)</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Update Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Update Settings</h2>
+                    <p class="card-subtitle">Configure how updates are processed</p>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label" for="batch-size">Batch Size</label>
+                        <input type="number" class="form-input" id="batch-size" name="batch_size" min="1" max="500" value="50" style="max-width: 150px;">
+                        <p class="form-help">Number of tiles to process per job (1-500)</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="concurrency">Concurrency</label>
+                        <input type="number" class="form-input" id="concurrency" name="concurrency" min="1" max="50" value="20" style="max-width: 150px;">
+                        <p class="form-help">Concurrent API requests (1-50). Higher values are faster but may hit rate limits.</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="min-age">Minimum Age for Recheck</label>
+                        <div class="input-group" style="max-width: 200px;">
+                            <input type="number" class="form-input" id="min-age" name="min_age_days" min="1" max="365" value="90">
+                            <span class="btn btn-secondary" style="pointer-events: none;">days</span>
+                        </div>
+                        <p class="form-help">Skip locations checked within this many days</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- API Settings -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">API Settings</h2>
+                    <p class="card-subtitle">Control external API interactions</p>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label" for="overpass-delay">Overpass API Delay</label>
+                        <div class="input-group" style="max-width: 200px;">
+                            <input type="number" class="form-input" id="overpass-delay" name="overpass_delay" min="0" max="30" step="0.5" value="2">
+                            <span class="btn btn-secondary" style="pointer-events: none;">seconds</span>
+                        </div>
+                        <p class="form-help">Delay between Overpass API requests to respect rate limits</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="samples-per-road">Samples per Road</label>
+                        <input type="number" class="form-input" id="samples-per-road" name="samples_per_road" min="1" max="20" value="5" style="max-width: 150px;">
+                        <p class="form-help">Number of sample points per road segment (1-20)</p>
+                    </div>
+
+                    <div class="form-group">
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="adaptive-sampling" name="adaptive_sampling">
+                            <label class="form-check-label" for="adaptive-sampling">
+                                <strong>Adaptive Sampling</strong>
+                            </label>
+                        </div>
+                        <p class="form-help">Adjust sample count based on road length</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Actions</h2>
+                    <p class="card-subtitle">Save or reset configuration</p>
+                </div>
+                <div class="card-body">
+                    <div class="d-flex flex-wrap gap-md">
+                        <button type="submit" class="btn btn-primary btn-lg" id="save-btn" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                                <polyline points="17 21 17 13 7 13 7 21"/>
+                                <polyline points="7 3 7 8 15 8"/>
+                            </svg>
+                            Save Changes
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-lg" id="reset-btn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+                                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                                <path d="M3 3v5h5"/>
+                            </svg>
+                            Reset to Defaults
+                        </button>
+                    </div>
+
+                    <div class="mt-lg" id="save-status" style="display: none;">
+                        <!-- Status messages will appear here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>
+
+<!-- API Key Modal -->
+<div class="modal-backdrop" id="apikey-modal-backdrop"></div>
+<div class="modal" id="apikey-modal" role="dialog" aria-labelledby="apikey-modal-title" aria-modal="true">
+    <div class="modal-header">
+        <h3 class="modal-title" id="apikey-modal-title">Enter API Key</h3>
+        <button class="modal-close" id="apikey-modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+        <p class="text-muted mb-md">An API key is required to modify configuration settings.</p>
+        <div class="form-group mb-0">
+            <label class="form-label" for="apikey-input">API Key</label>
+            <input type="password" class="form-input" id="apikey-input" placeholder="Enter your API key">
+        </div>
+    </div>
+    <div class="modal-footer">
+        <button class="btn btn-secondary" id="apikey-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="apikey-modal-confirm">Authenticate</button>
+    </div>
+</div>
+
+<!-- Confirm Reset Modal -->
+<div class="modal-backdrop" id="reset-modal-backdrop"></div>
+<div class="modal" id="reset-modal" role="dialog" aria-labelledby="reset-modal-title" aria-modal="true">
+    <div class="modal-header">
+        <h3 class="modal-title" id="reset-modal-title">Reset Configuration?</h3>
+        <button class="modal-close" id="reset-modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+        <p>Are you sure you want to reset all configuration to default values? This action cannot be undone.</p>
+    </div>
+    <div class="modal-footer">
+        <button class="btn btn-secondary" id="reset-modal-cancel">Cancel</button>
+        <button class="btn btn-danger" id="reset-modal-confirm">Reset to Defaults</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/config.js') }}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        ConfigPage.init();
+    });
+</script>
+{% endblock %}

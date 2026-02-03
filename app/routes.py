@@ -510,10 +510,13 @@ def update_config(validated_data: ConfigUpdateRequest):
 
 @api_bp.route('/cities', methods=['GET'])
 def list_cities():
-    """List all UK cities with their bounding boxes and priorities.
+    """List all UK cities with their bounding boxes, center coordinates, and priorities.
 
     Query params:
         priority: Filter by priority level
+
+    Returns:
+        List of cities with name, key, bbox, lat, lon, and priority
     """
     priority = request.args.get('priority')
 
@@ -522,10 +525,17 @@ def list_cities():
         if priority and data['priority'] != priority:
             continue
 
+        bbox = data['bbox']  # (min_lon, min_lat, max_lon, max_lat)
+        # Calculate center coordinates for search functionality
+        center_lat = (bbox[1] + bbox[3]) / 2
+        center_lon = (bbox[0] + bbox[2]) / 2
+
         cities.append({
             "name": name.replace('_', ' ').title(),
             "key": name,
-            "bbox": list(data['bbox']),
+            "bbox": list(bbox),
+            "lat": center_lat,
+            "lon": center_lon,
             "priority": data['priority']
         })
 

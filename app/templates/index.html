@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Map - Street View Heatmap{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/map.css') }}">
+{% endblock %}
+
+{% block main_class %}main-map map-page{% endblock %}
+
+{% block footer %}{% endblock %}
+
+{% block content %}
+<div class="map-wrapper">
+    <!-- Map Container -->
+    <div id="map" role="application" aria-label="Interactive map showing Street View coverage across the UK"></div>
+
+    <!-- Search Box -->
+    <div class="map-search">
+        <div class="search-container">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <circle cx="11" cy="11" r="8"/>
+                <path d="m21 21-4.35-4.35"/>
+            </svg>
+            <input type="text"
+                   class="search-input"
+                   id="search-input"
+                   placeholder="Search for a city or location..."
+                   aria-label="Search for a city or location"
+                   autocomplete="off">
+            <div class="search-results" id="search-results" role="listbox"></div>
+        </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="map-legend" id="map-legend">
+        <div class="legend-title">Image Age</div>
+        <div class="legend-items">
+            <div class="legend-item">
+                <span class="legend-color fresh" aria-hidden="true"></span>
+                <span class="legend-label">&lt;3 months</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color recent" aria-hidden="true"></span>
+                <span class="legend-label">&lt;1 year</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color old" aria-hidden="true"></span>
+                <span class="legend-label">&lt;3 years</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color stale" aria-hidden="true"></span>
+                <span class="legend-label">3+ years</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color unknown" aria-hidden="true"></span>
+                <span class="legend-label">Unknown</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Layer Controls -->
+    <div class="map-controls">
+        <div class="layer-control" id="layer-control">
+            <div class="layer-control-header">
+                <span>Layers</span>
+                <button class="layer-control-toggle" id="layer-toggle" aria-label="Toggle layer panel" aria-expanded="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <polyline points="6 9 12 15 18 9"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="layer-control-body" id="layer-body">
+                <div class="layer-control-item">
+                    <input type="checkbox" id="layer-roads" checked>
+                    <label for="layer-roads">Road Coverage</label>
+                </div>
+                <div class="layer-control-item">
+                    <input type="checkbox" id="layer-grid">
+                    <label for="layer-grid">Coverage Grid</label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tile Loading Indicator -->
+    <div class="tile-loading-indicator" id="tile-loading">
+        <div class="loading-spinner"></div>
+        <span>Loading tiles...</span>
+    </div>
+
+    <!-- Coordinate Display -->
+    <div class="coordinate-display" id="coordinate-display">
+        <span id="coord-lat">--</span>, <span id="coord-lon">--</span>
+    </div>
+
+    <!-- Initial Loading Overlay -->
+    <div class="map-loading" id="map-loading">
+        <div class="loading-spinner"></div>
+        <div class="map-loading-text">Initializing map...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/map.js') }}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initialize the map
+        HeatmapMap.init();
+    });
+</script>
+{% endblock %}

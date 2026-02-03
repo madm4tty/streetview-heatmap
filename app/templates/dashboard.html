@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Street View Heatmap{% endblock %}
+
+{% block main_class %}main-page{% endblock %}
+
+{% block content %}
+<div class="container">
+    <!-- Page Header -->
+    <div class="page-header">
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-subtitle">Monitor system status, coverage progress, and recent activity</p>
+    </div>
+
+    <!-- System Status Card -->
+    <div class="grid grid-2 mb-lg">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">System Status</h2>
+            </div>
+            <div class="card-body" id="system-status">
+                <div class="loading-container">
+                    <div class="loading-spinner"></div>
+                    <p class="loading-message">Loading status...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Current Job Card -->
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">Current Job</h2>
+            </div>
+            <div class="card-body" id="current-job">
+                <div class="loading-container">
+                    <div class="loading-spinner"></div>
+                    <p class="loading-message">Loading job status...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Coverage Statistics -->
+    <div class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">Coverage Progress</h2>
+            <p class="card-subtitle">Street View coverage by priority level</p>
+        </div>
+        <div class="card-body" id="coverage-stats">
+            <div class="loading-container">
+                <div class="loading-spinner"></div>
+                <p class="loading-message">Loading coverage statistics...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Database Statistics -->
+    <div class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">Database Statistics</h2>
+        </div>
+        <div class="card-body">
+            <div class="stats-grid" id="db-stats">
+                <div class="stat-card skeleton">
+                    <div class="skeleton-text" style="width: 60%; margin: 0 auto;"></div>
+                    <div class="skeleton-text" style="width: 80%; margin: 8px auto 0;"></div>
+                </div>
+                <div class="stat-card skeleton">
+                    <div class="skeleton-text" style="width: 60%; margin: 0 auto;"></div>
+                    <div class="skeleton-text" style="width: 80%; margin: 8px auto 0;"></div>
+                </div>
+                <div class="stat-card skeleton">
+                    <div class="skeleton-text" style="width: 60%; margin: 0 auto;"></div>
+                    <div class="skeleton-text" style="width: 80%; margin: 8px auto 0;"></div>
+                </div>
+                <div class="stat-card skeleton">
+                    <div class="skeleton-text" style="width: 60%; margin: 0 auto;"></div>
+                    <div class="skeleton-text" style="width: 80%; margin: 8px auto 0;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="card">
+        <div class="card-header d-flex justify-between align-center">
+            <div>
+                <h2 class="card-title">Recent Activity</h2>
+                <p class="card-subtitle">Last 10 completed jobs</p>
+            </div>
+            <div class="d-flex align-center gap-sm" id="live-indicator" style="display: none;">
+                <span class="status-dot status-running"></span>
+                <span class="text-small text-muted">Live</span>
+            </div>
+        </div>
+        <div class="card-body" id="recent-activity">
+            <div class="loading-container">
+                <div class="loading-spinner"></div>
+                <p class="loading-message">Loading activity...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Manual Update Modal -->
+<div class="modal-backdrop" id="update-modal-backdrop"></div>
+<div class="modal" id="update-modal" role="dialog" aria-labelledby="update-modal-title" aria-modal="true">
+    <div class="modal-header">
+        <h3 class="modal-title" id="update-modal-title">Trigger Manual Update</h3>
+        <button class="modal-close" id="update-modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+        <div class="form-group">
+            <label class="form-label" for="update-priority">Priority Filter</label>
+            <select class="form-select" id="update-priority">
+                <option value="all">All Priorities</option>
+                <option value="high">High Priority Only</option>
+                <option value="medium">Medium Priority Only</option>
+                <option value="low">Low Priority Only</option>
+            </select>
+            <p class="form-help">Select which priority tiles to update</p>
+        </div>
+        <div class="form-group">
+            <label class="form-label" for="update-limit">Tile Limit (optional)</label>
+            <input type="number" class="form-input" id="update-limit" placeholder="Leave empty for no limit" min="1">
+            <p class="form-help">Maximum number of tiles to process</p>
+        </div>
+    </div>
+    <div class="modal-footer">
+        <button class="btn btn-secondary" id="update-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="update-modal-confirm">Start Update</button>
+    </div>
+</div>
+
+<!-- API Key Modal -->
+<div class="modal-backdrop" id="apikey-modal-backdrop"></div>
+<div class="modal" id="apikey-modal" role="dialog" aria-labelledby="apikey-modal-title" aria-modal="true">
+    <div class="modal-header">
+        <h3 class="modal-title" id="apikey-modal-title">Enter API Key</h3>
+        <button class="modal-close" id="apikey-modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+        <p class="text-muted mb-md">An API key is required to trigger updates or modify configuration.</p>
+        <div class="form-group mb-0">
+            <label class="form-label" for="apikey-input">API Key</label>
+            <input type="password" class="form-input" id="apikey-input" placeholder="Enter your API key">
+        </div>
+    </div>
+    <div class="modal-footer">
+        <button class="btn btn-secondary" id="apikey-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="apikey-modal-confirm">Authenticate</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        Dashboard.init();
+    });
+</script>
+{% endblock %}

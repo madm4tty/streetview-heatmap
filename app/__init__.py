@@ -83,6 +83,7 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     - Database initialization
     - Scheduler setup
     - Proper logging
+    - Web frontend with templates
 
     Args:
         config_path: Path to YAML configuration file
@@ -90,7 +91,11 @@ def create_app(config_path: str = "config.yaml") -> Flask:
     Returns:
         Configured Flask application
     """
-    app = Flask(__name__)
+    app = Flask(
+        __name__,
+        template_folder='templates',
+        static_folder='static'
+    )
     logger = logging.getLogger(__name__)
 
     # Load configuration
@@ -139,8 +144,12 @@ def create_app(config_path: str = "config.yaml") -> Flask:
 
     # Register blueprints
     from app.routes import api_bp
+    from app.pages import pages_bp
+
     app.register_blueprint(api_bp, url_prefix='/api')
+    app.register_blueprint(pages_bp)  # Pages at root level
     logger.info("Registered API blueprint at /api")
+    logger.info("Registered pages blueprint for web frontend")
 
     # Initialize scheduler if enabled
     scheduler_enabled = config.get('scheduler.enabled', True)
@@ -169,15 +178,6 @@ def create_app(config_path: str = "config.yaml") -> Flask:
         signal.signal(signal.SIGINT, signal_handler)
     else:
         logger.info("Scheduler disabled in configuration")
-
-    # Add a simple root endpoint
-    @app.route('/')
-    def index():
-        return {
-            "name": "Street View Heatmap API",
-            "version": "2.0.0",
-            "docs": "/api/health"
-        }
 
     logger.info("Application ready")
     return app

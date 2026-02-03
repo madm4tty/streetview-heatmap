@@ -4,6 +4,7 @@ This project visualizes the age of Google Street View imagery across UK road net
 
 ## Features
 
+- **Interactive Web Frontend**: Full-featured web interface with interactive map
 - **CLI Tool**: Generate heatmaps for specific bounding boxes
 - **REST API**: Web backend with automated scheduling
 - **PostgreSQL/PostGIS**: Spatial database for UK-wide coverage
@@ -61,7 +62,74 @@ export API_KEY=your_secure_api_key
 python run.py
 ```
 
-The API will be available at `http://localhost:5000/api/`
+The application will be available at `http://localhost:5001/`
+
+> **Note:** The application runs on port **5001** (not 5000) to avoid conflicts with macOS AirPlay Receiver which uses port 5000.
+
+---
+
+## Web Frontend
+
+The application includes a full-featured web frontend built with vanilla JavaScript and Leaflet.
+
+### Accessing the Application
+
+Open your browser and navigate to `http://localhost:5001/`
+
+### Pages
+
+| Page | URL | Description |
+|------|-----|-------------|
+| **Map** | `/` | Interactive map with Street View coverage visualization |
+| **Dashboard** | `/dashboard` | System status, coverage statistics, job monitoring |
+| **Config** | `/config` | Configuration management (requires API key) |
+| **Help** | `/instructions` | Documentation and usage guide |
+
+### Map Features
+
+- **Interactive Leaflet Map** centered on the UK
+- **Color-Coded Roads** by Street View image age:
+  - 🟢 Green: Less than 3 months old
+  - 🟡 Yellow: Less than 1 year old
+  - 🟠 Orange: Less than 3 years old
+  - 🔴 Red: 3+ years old
+- **Viewport-Based Loading**: Only loads tiles visible on screen
+- **Search**: Jump to cities by name
+- **Coverage Grid**: Toggle layer to see tile boundaries
+- **Tooltips & Popups**: Click or hover for details
+
+### Dashboard Features
+
+- **System Status**: Current state, scheduler info, last/next update
+- **Coverage Statistics**: Progress bars by priority level
+- **Current Job Monitoring**: Real-time progress when updates are running
+- **Database Statistics**: Entry counts and coverage metrics
+- **Manual Updates**: Trigger updates with priority filters
+
+### Configuration
+
+The Config page allows authenticated users to modify:
+- **Scheduler Settings**: Enable/disable, update interval
+- **Update Settings**: Batch size, concurrency, minimum age for recheck
+- **API Settings**: Overpass delay, samples per road, adaptive sampling
+
+### Browser Compatibility
+
+- Chrome 90+
+- Firefox 88+
+- Safari 14+
+- Edge 90+
+
+### Screenshots
+
+#### Map View
+The interactive map displays road segments colored by their Street View image age, with a legend and layer controls.
+
+#### Dashboard
+Real-time monitoring of system status, coverage progress, and job execution.
+
+#### Configuration
+Form-based interface for modifying application settings with validation.
 
 ---
 
@@ -71,12 +139,16 @@ The API will be available at `http://localhost:5000/api/`
 
 All API endpoints are prefixed with `/api/`
 
+```
+http://localhost:5001/api/
+```
+
 ### Authentication
 
 Write operations (POST endpoints) require an `X-API-Key` header:
 
 ```bash
-curl -X POST http://localhost:5000/api/update/trigger \
+curl -X POST http://localhost:5001/api/update/trigger \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json"
 ```
@@ -316,12 +388,29 @@ Update configuration values. Requires API key.
 GET /api/cities
 ```
 
-List UK cities with bounding boxes.
+List UK cities with bounding boxes and center coordinates.
 
 **Query Parameters:**
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | priority | string | Filter by priority level |
+
+**Response:**
+```json
+{
+  "cities": [
+    {
+      "name": "London",
+      "key": "london",
+      "bbox": [-0.51, 51.28, 0.33, 51.69],
+      "lat": 51.485,
+      "lon": -0.09,
+      "priority": "high"
+    }
+  ],
+  "total": 130
+}
+```
 
 ---
 
@@ -332,7 +421,7 @@ Configuration is managed via `config.yaml` with environment variable substitutio
 ```yaml
 app:
   host: 0.0.0.0
-  port: 5000
+  port: 5001
   api_key: ${API_KEY:-changeme}
   debug: false
 
@@ -441,31 +530,31 @@ pytest tests/test_config.py
 
 ```bash
 # Health check
-curl http://localhost:5000/api/health
+curl http://localhost:5001/api/health
 
 # Get system status
-curl http://localhost:5000/api/status
+curl http://localhost:5001/api/status
 
 # List high-priority tiles with data
-curl "http://localhost:5000/api/tiles?priority=high&has_data=true&per_page=10"
+curl "http://localhost:5001/api/tiles?priority=high&has_data=true&per_page=10"
 
 # Get tile GeoJSON data
-curl http://localhost:5000/api/tiles/tile_126_78/data
+curl http://localhost:5001/api/tiles/tile_126_78/data
 
 # Trigger update job (requires API key)
-curl -X POST http://localhost:5000/api/update/trigger \
+curl -X POST http://localhost:5001/api/update/trigger \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
   -d '{"priority": "high", "tile_limit": 10}'
 
 # Check update job status
-curl http://localhost:5000/api/update/status
+curl http://localhost:5001/api/update/status
 
 # Get configuration
-curl http://localhost:5000/api/config
+curl http://localhost:5001/api/config
 
 # List cities
-curl http://localhost:5000/api/cities
+curl http://localhost:5001/api/cities
 ```
 
 ---
@@ -475,11 +564,30 @@ curl http://localhost:5000/api/cities
 ```
 streetview-heatmap/
 ├── app/
-│   ├── __init__.py      # Flask app factory
-│   ├── routes.py        # API endpoints
-│   ├── models.py        # Pydantic validation models
-│   ├── scheduler.py     # Background job scheduler
-│   └── processing.py    # Core processing logic
+│   ├── __init__.py         # Flask app factory
+│   ├── routes.py           # API endpoints
+│   ├── pages.py            # Web page routes
+│   ├── models.py           # Pydantic validation models
+│   ├── scheduler.py        # Background job scheduler
+│   ├── processing.py       # Core processing logic
+│   ├── templates/          # Jinja2 templates
+│   │   ├── base.html       # Base template with navigation
+│   │   ├── index.html      # Map page
+│   │   ├── dashboard.html  # Status dashboard
+│   │   ├── config.html     # Configuration panel
+│   │   └── instructions.html # Help page
+│   └── static/
+│       ├── css/
+│       │   ├── main.css    # Main styles
+│       │   └── map.css     # Map-specific styles
+│       ├── js/
+│       │   ├── api.js      # API client wrapper
+│       │   ├── utils.js    # Shared utilities
+│       │   ├── map.js      # Interactive map
+│       │   ├── dashboard.js # Dashboard logic
+│       │   └── config.js   # Configuration page
+│       └── images/
+│           └── favicon.svg
 ├── migrations/
 │   └── 001_create_job_status.py
 ├── tests/
@@ -487,12 +595,12 @@ streetview-heatmap/
 │   ├── test_scheduler.py
 │   ├── test_processing.py
 │   └── test_config.py
-├── config.py            # Configuration management
-├── config.yaml          # Default configuration
-├── database.py          # Database abstraction
-├── geographic_scope.py  # UK cities and tile system
-├── generate_heatmap.py  # CLI tool
-├── run.py               # Web app entry point
+├── config.py               # Configuration management
+├── config.yaml             # Default configuration
+├── database.py             # Database abstraction
+├── geographic_scope.py     # UK cities and tile system
+├── generate_heatmap.py     # CLI tool
+├── run.py                  # Web app entry point
 └── requirements.txt
 ```
 

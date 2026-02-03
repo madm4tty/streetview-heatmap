@@ -1,0 +1,373 @@
+{% extends "base.html" %}
+
+{% block title %}Help & Instructions - Street View Heatmap{% endblock %}
+
+{% block main_class %}main-page{% endblock %}
+
+{% block content %}
+<div class="container">
+    <!-- Page Header -->
+    <div class="page-header">
+        <h1 class="page-title">Help & Instructions</h1>
+        <p class="page-subtitle">Learn how to use the Street View Heatmap application</p>
+    </div>
+
+    <!-- Table of Contents -->
+    <div class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">Contents</h2>
+        </div>
+        <div class="card-body">
+            <nav aria-label="Table of contents">
+                <ul style="list-style: none; padding: 0; margin: 0;">
+                    <li><a href="#overview" class="d-flex align-center gap-sm" style="padding: 0.5rem 0;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                        Project Overview
+                    </a></li>
+                    <li><a href="#map" class="d-flex align-center gap-sm" style="padding: 0.5rem 0;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/></svg>
+                        Understanding the Map
+                    </a></li>
+                    <li><a href="#apis" class="d-flex align-center gap-sm" style="padding: 0.5rem 0;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+                        API Information
+                    </a></li>
+                    <li><a href="#freshness" class="d-flex align-center gap-sm" style="padding: 0.5rem 0;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        Data Freshness
+                    </a></li>
+                    <li><a href="#coverage" class="d-flex align-center gap-sm" style="padding: 0.5rem 0;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+                        Geographic Coverage
+                    </a></li>
+                    <li><a href="#technical" class="d-flex align-center gap-sm" style="padding: 0.5rem 0;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                        Technical Details
+                    </a></li>
+                    <li><a href="#api-docs" class="d-flex align-center gap-sm" style="padding: 0.5rem 0;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        API Documentation
+                    </a></li>
+                </ul>
+            </nav>
+        </div>
+    </div>
+
+    <!-- Project Overview -->
+    <section id="overview" class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">Project Overview</h2>
+        </div>
+        <div class="card-body">
+            <h3>What is Street View Heatmap?</h3>
+            <p>Street View Heatmap is a tool that visualizes the age of Google Street View imagery across the UK. It helps identify areas where Street View coverage is outdated or missing, which is valuable for:</p>
+            <ul>
+                <li><strong>Urban planners</strong> - understanding infrastructure documentation status</li>
+                <li><strong>Researchers</strong> - analyzing temporal coverage patterns</li>
+                <li><strong>Mapping enthusiasts</strong> - discovering where new imagery might be captured soon</li>
+                <li><strong>Local authorities</strong> - identifying areas needing updated visual documentation</li>
+            </ul>
+
+            <h3 class="mt-lg">Why Does Image Age Matter?</h3>
+            <p>Google Street View imagery varies significantly in age. Some areas have imagery updated every few months, while others may not have been updated for years. Older imagery may show:</p>
+            <ul>
+                <li>Buildings that have been demolished or significantly changed</li>
+                <li>Road layouts that no longer exist</li>
+                <li>Businesses that have closed or moved</li>
+                <li>Areas before major development projects</li>
+            </ul>
+
+            <h3 class="mt-lg">How Data is Collected</h3>
+            <p>The system works by:</p>
+            <ol>
+                <li><strong>Querying OpenStreetMap</strong> - Using the Overpass API to get road network data</li>
+                <li><strong>Sampling locations</strong> - Selecting points along each road segment</li>
+                <li><strong>Checking Street View</strong> - Using Google's Street View Metadata API to find capture dates</li>
+                <li><strong>Storing results</strong> - Saving location data with capture dates in PostgreSQL</li>
+            </ol>
+        </div>
+    </section>
+
+    <!-- Understanding the Map -->
+    <section id="map" class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">Understanding the Map</h2>
+        </div>
+        <div class="card-body">
+            <h3>Color Scheme</h3>
+            <p>Roads are colored based on how recently Google captured Street View imagery at that location:</p>
+
+            <div class="grid grid-2 mt-md mb-lg" style="gap: 1rem;">
+                <div class="d-flex align-center gap-md" style="padding: 1rem; background: var(--bg-tertiary); border-radius: var(--radius);">
+                    <div style="width: 40px; height: 40px; border-radius: var(--radius); background: var(--color-age-fresh);"></div>
+                    <div>
+                        <strong>Green - Fresh</strong>
+                        <p class="text-muted text-small mb-0">Less than 3 months old</p>
+                    </div>
+                </div>
+                <div class="d-flex align-center gap-md" style="padding: 1rem; background: var(--bg-tertiary); border-radius: var(--radius);">
+                    <div style="width: 40px; height: 40px; border-radius: var(--radius); background: var(--color-age-recent);"></div>
+                    <div>
+                        <strong>Yellow - Recent</strong>
+                        <p class="text-muted text-small mb-0">Less than 1 year old</p>
+                    </div>
+                </div>
+                <div class="d-flex align-center gap-md" style="padding: 1rem; background: var(--bg-tertiary); border-radius: var(--radius);">
+                    <div style="width: 40px; height: 40px; border-radius: var(--radius); background: var(--color-age-old);"></div>
+                    <div>
+                        <strong>Orange - Dated</strong>
+                        <p class="text-muted text-small mb-0">Less than 3 years old</p>
+                    </div>
+                </div>
+                <div class="d-flex align-center gap-md" style="padding: 1rem; background: var(--bg-tertiary); border-radius: var(--radius);">
+                    <div style="width: 40px; height: 40px; border-radius: var(--radius); background: var(--color-age-stale);"></div>
+                    <div>
+                        <strong>Red - Stale</strong>
+                        <p class="text-muted text-small mb-0">3 or more years old</p>
+                    </div>
+                </div>
+            </div>
+
+            <h3>Coverage Grid</h3>
+            <p>Toggle the "Coverage Grid" layer to see the tile boundaries:</p>
+            <ul>
+                <li><strong>Blue outline</strong> - Tiles with collected data</li>
+                <li><strong>Gray dashed outline</strong> - Tiles without data yet</li>
+            </ul>
+
+            <h3 class="mt-lg">Interacting with the Map</h3>
+            <ul>
+                <li><strong>Pan</strong> - Click and drag to move around</li>
+                <li><strong>Zoom</strong> - Use mouse wheel or +/- buttons</li>
+                <li><strong>Search</strong> - Type a city name to jump to that location</li>
+                <li><strong>Hover</strong> - Move over roads to see quick info</li>
+                <li><strong>Click</strong> - Click on roads for detailed information</li>
+            </ul>
+
+            <div class="alert alert-info mt-md">
+                <strong>Note:</strong> Road data only loads when zoomed in to level 10 or higher. Zoom in to see individual road segments.
+            </div>
+        </div>
+    </section>
+
+    <!-- API Information -->
+    <section id="apis" class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">API Information</h2>
+        </div>
+        <div class="card-body">
+            <h3>Google Street View Metadata API</h3>
+            <p>This project uses Google's Street View Metadata API, which is <strong>free and unlimited</strong>. Unlike the Street View Image API (which costs money per image), the Metadata API only returns information about availability and capture dates without actually serving imagery.</p>
+
+            <div class="alert alert-success">
+                <strong>Cost:</strong> Free - no charges for metadata requests
+            </div>
+
+            <h3 class="mt-lg">Overpass API (OpenStreetMap)</h3>
+            <p>Road network data comes from OpenStreetMap via the Overpass API:</p>
+            <ul>
+                <li>Free to use with reasonable rate limiting</li>
+                <li>Comprehensive road network data for the UK</li>
+                <li>Includes road names, types, and geometries</li>
+            </ul>
+
+            <h3 class="mt-lg">Rate Limiting</h3>
+            <p>To be respectful of external APIs, the system includes built-in delays:</p>
+            <ul>
+                <li><strong>Overpass API</strong> - 2 second delay between requests (configurable)</li>
+                <li><strong>Street View API</strong> - Concurrent requests limited to 20 (configurable)</li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- Data Freshness -->
+    <section id="freshness" class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">Data Freshness</h2>
+        </div>
+        <div class="card-body">
+            <h3>Update Schedule</h3>
+            <p>The system can run automatic updates on a configurable schedule (default: every 24 hours). Updates are "smart" and prioritize:</p>
+            <ol>
+                <li><strong>High priority areas</strong> - Major cities and urban centers</li>
+                <li><strong>Medium priority areas</strong> - Towns and major roads</li>
+                <li><strong>Low priority areas</strong> - Rural areas and minor roads</li>
+            </ol>
+
+            <h3 class="mt-lg">Smart Refresh Strategy</h3>
+            <p>To avoid redundant API calls, the system:</p>
+            <ul>
+                <li>Skips locations checked within the last 90 days (configurable)</li>
+                <li>Prioritizes areas that haven't been checked recently</li>
+                <li>Batches requests efficiently to maximize coverage</li>
+            </ul>
+
+            <h3 class="mt-lg">Manual Updates</h3>
+            <p>From the Dashboard, you can trigger manual updates with specific priority filters:</p>
+            <ul>
+                <li>Update only high-priority areas for quick city coverage</li>
+                <li>Update all priorities for comprehensive refresh</li>
+                <li>Set tile limits to control processing time</li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- Geographic Coverage -->
+    <section id="coverage" class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">Geographic Coverage</h2>
+        </div>
+        <div class="card-body">
+            <h3>UK Mainland Coverage</h3>
+            <p>The system covers the UK mainland with approximately <strong>44,000 tiles</strong>, each roughly 5km x 5km (0.05° x 0.05°).</p>
+
+            <h3 class="mt-lg">Priority Cities</h3>
+            <p>High-priority areas include major UK cities:</p>
+            <div class="grid grid-4 mt-md" style="gap: 0.5rem;">
+                <span class="badge badge-primary">London</span>
+                <span class="badge badge-primary">Birmingham</span>
+                <span class="badge badge-primary">Manchester</span>
+                <span class="badge badge-primary">Glasgow</span>
+                <span class="badge badge-primary">Liverpool</span>
+                <span class="badge badge-primary">Leeds</span>
+                <span class="badge badge-primary">Edinburgh</span>
+                <span class="badge badge-primary">Bristol</span>
+                <span class="badge badge-primary">Sheffield</span>
+                <span class="badge badge-primary">Newcastle</span>
+                <span class="badge badge-primary">Cardiff</span>
+                <span class="badge badge-primary">Belfast</span>
+            </div>
+
+            <h3 class="mt-lg">Road Type Priorities</h3>
+            <p>Within each area, roads are prioritized by type:</p>
+            <ul>
+                <li><strong>Primary roads</strong> - A-roads, major routes</li>
+                <li><strong>Secondary roads</strong> - B-roads, important local roads</li>
+                <li><strong>Residential roads</strong> - Local streets in populated areas</li>
+            </ul>
+
+            <h3 class="mt-lg">Why Some Roads Have No Data</h3>
+            <p>Some roads may appear without coverage data because:</p>
+            <ul>
+                <li>Google hasn't captured Street View there yet</li>
+                <li>The area is private or restricted access</li>
+                <li>The tile hasn't been processed yet</li>
+                <li>The road is too new for OpenStreetMap data</li>
+            </ul>
+        </div>
+    </section>
+
+    <!-- Technical Details -->
+    <section id="technical" class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">Technical Details</h2>
+        </div>
+        <div class="card-body">
+            <h3>Technology Stack</h3>
+            <div class="grid grid-2 mt-md">
+                <div>
+                    <h4>Backend</h4>
+                    <ul>
+                        <li><strong>Flask</strong> - Python web framework</li>
+                        <li><strong>PostgreSQL</strong> - Database with PostGIS</li>
+                        <li><strong>APScheduler</strong> - Background job scheduling</li>
+                        <li><strong>aiohttp</strong> - Async HTTP requests</li>
+                    </ul>
+                </div>
+                <div>
+                    <h4>Frontend</h4>
+                    <ul>
+                        <li><strong>Leaflet</strong> - Interactive maps</li>
+                        <li><strong>Vanilla JavaScript</strong> - No framework dependencies</li>
+                        <li><strong>CSS Variables</strong> - Theming and responsiveness</li>
+                    </ul>
+                </div>
+            </div>
+
+            <h3 class="mt-lg">Data Storage</h3>
+            <ul>
+                <li><strong>Tile size:</strong> 0.05° x 0.05° (~5km x 5km)</li>
+                <li><strong>Storage format:</strong> PostgreSQL with GeoJSON support</li>
+                <li><strong>Capacity:</strong> Millions of location records</li>
+            </ul>
+
+            <h3 class="mt-lg">Server Configuration</h3>
+            <div class="alert alert-info">
+                <strong>Port:</strong> The application runs on port <code>5001</code> (not 5000) to avoid conflicts with macOS AirPlay Receiver which uses port 5000.
+            </div>
+        </div>
+    </section>
+
+    <!-- API Documentation -->
+    <section id="api-docs" class="card mb-lg">
+        <div class="card-header">
+            <h2 class="card-title">API Documentation</h2>
+        </div>
+        <div class="card-body">
+            <p>The application provides a REST API for programmatic access.</p>
+
+            <h3>Base URL</h3>
+            <pre>http://localhost:5001/api</pre>
+
+            <h3 class="mt-lg">Endpoints</h3>
+
+            <h4 class="mt-md">GET /api/health</h4>
+            <p>Check API health status</p>
+            <pre>curl http://localhost:5001/api/health</pre>
+
+            <h4 class="mt-md">GET /api/status</h4>
+            <p>Get comprehensive system status including coverage statistics</p>
+            <pre>curl http://localhost:5001/api/status</pre>
+
+            <h4 class="mt-md">GET /api/tiles</h4>
+            <p>List tiles with optional filtering</p>
+            <pre># Get all tiles
+curl http://localhost:5001/api/tiles
+
+# Filter by priority
+curl "http://localhost:5001/api/tiles?priority=high"
+
+# Filter by bounding box
+curl "http://localhost:5001/api/tiles?min_lat=51.4&max_lat=51.6&min_lon=-0.2&max_lon=0.1"</pre>
+
+            <h4 class="mt-md">GET /api/tiles/{tile_id}/data</h4>
+            <p>Get GeoJSON data for a specific tile</p>
+            <pre>curl http://localhost:5001/api/tiles/51.50_-0.15/data</pre>
+
+            <h4 class="mt-md">POST /api/update/trigger</h4>
+            <p>Trigger a manual update (requires API key)</p>
+            <pre>curl -X POST http://localhost:5001/api/update/trigger \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{"priority_filter": "high", "tile_limit": 10}'</pre>
+
+            <h4 class="mt-md">GET /api/config</h4>
+            <p>Get current configuration</p>
+            <pre>curl http://localhost:5001/api/config</pre>
+
+            <h4 class="mt-md">POST /api/config</h4>
+            <p>Update configuration (requires API key)</p>
+            <pre>curl -X POST http://localhost:5001/api/config \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{"scheduler": {"enabled": true}, "update": {"batch_size": 100}}'</pre>
+
+            <h3 class="mt-lg">Authentication</h3>
+            <p>Endpoints that modify data require an API key passed in the <code>X-API-Key</code> header. The API key is configured in the application's <code>config.yaml</code> file.</p>
+
+            <h3 class="mt-lg">Response Format</h3>
+            <p>All responses are JSON. Error responses include an <code>error</code> field with a description.</p>
+        </div>
+    </section>
+
+    <!-- Back to Top -->
+    <div class="text-center mt-lg">
+        <a href="#" class="btn btn-secondary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                <path d="M18 15l-6-6-6 6"/>
+            </svg>
+            Back to Top
+        </a>
+    </div>
+</div>
+{% endblock %}
