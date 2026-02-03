@@ -1,201 +1,521 @@
 # streetview-heatmap
 
+This project visualizes the age of Google Street View imagery across UK road networks. It queries the Google Street View metadata API and colours OpenStreetMap road segments according to the capture date of nearby imagery.
 
-This project experiments with visualising the age of street-level imagery. The
-included Python script queries the Google Street View metadata API and colours
-OpenStreetMap road segments according to the capture date of nearby imagery.
-The default bounding box covers Farsley, West Yorkshire.
+## Features
+
+- **CLI Tool**: Generate heatmaps for specific bounding boxes
+- **REST API**: Web backend with automated scheduling
+- **PostgreSQL/PostGIS**: Spatial database for UK-wide coverage
+- **Smart Refresh**: Priority-based tile processing with age tracking
+- **Background Jobs**: Automated scheduled updates
 
 ## Requirements
 
 - Python 3.8+
-- A Google Maps API key (`GOOGLE_MAPS_API_KEY` environment variable). If you are
-  using GitHub Codespaces, a secret called `GMAPS_APIKEY` will also be detected
-  automatically.
-- Optional: PostgreSQL with PostGIS for UK-wide coverage (see below)
+- A Google Maps API key (`GOOGLE_MAPS_API_KEY` environment variable)
+- PostgreSQL with PostGIS (for web backend and UK-wide coverage)
 
-Install dependencies:
+## Quick Start
+
+### Installation
 
 ```bash
+# Clone the repository
+git clone git@github.com:madm4tty/streetview-heatmap.git
+cd streetview-heatmap
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Create .env file
+cp .env.example .env
+# Edit .env with your API keys
 ```
 
-Run this command before executing `generate_heatmap.py` or
-`update_heatmaps.py` to ensure all required packages (such as `aiohttp`) are
-available.
-
-
-Create a `.env` file containing your Google Maps API key if you are running the
-scripts locally:
+### CLI Usage (Local Development)
 
 ```bash
-echo "GOOGLE_MAPS_API_KEY=YOUR_KEY" > .env
+# Set API key
+export GOOGLE_MAPS_API_KEY=YOUR_KEY
+
+# Generate heatmap for a specific area
+python generate_heatmap.py \
+  --bbox -1.70 53.79 -1.65 53.82 \
+  --samples 5 \
+  --output heatmap.html
 ```
 
-The script uses `python-dotenv` to load this file automatically when running.
-
-## Database Options
-
-### SQLite (Default)
-
-For local development and small areas, SQLite is used by default:
+### Web Backend
 
 ```bash
-# Optional: specify custom database path
-export HEATMAP_DB=metadata.db
+# Start PostgreSQL (using Docker)
+docker-compose up -d postgres
+
+# Set environment variables
+export DATABASE_URL=postgresql://streetview:streetview_dev@localhost:5432/streetview
+export GOOGLE_MAPS_API_KEY=YOUR_KEY
+export API_KEY=your_secure_api_key
+
+# Run the web server
+python run.py
 ```
 
-You can also specify this using the `--db` command-line option.
+The API will be available at `http://localhost:5000/api/`
 
-### PostgreSQL + PostGIS (UK-wide Coverage)
+---
 
-For UK-wide coverage with spatial indexing, use PostgreSQL with PostGIS:
+## Web API Documentation
 
-#### Quick Start with Docker
+### Base URL
+
+All API endpoints are prefixed with `/api/`
+
+### Authentication
+
+Write operations (POST endpoints) require an `X-API-Key` header:
+
+```bash
+curl -X POST http://localhost:5000/api/update/trigger \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json"
+```
+
+### Endpoints
+
+#### Health Check
+
+```
+GET /api/health
+```
+
+Returns service health status.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "database": "connected",
+  "timestamp": "2026-02-02T14:30:00Z"
+}
+```
+
+#### System Status
+
+```
+GET /api/status
+```
+
+Returns comprehensive system status including coverage statistics.
+
+**Response:**
+```json
+{
+  "status": "running",
+  "last_update": "2026-02-01T14:30:00Z",
+  "next_update": "2026-02-02T02:00:00Z",
+  "coverage": {
+    "high": {
+      "total_tiles": 500,
+      "tiles_with_data": 120,
+      "locations_total": 250000,
+      "locations_checked": 85000,
+      "percent_complete": 34.0
+    },
+    "medium": { ... },
+    "low": { ... }
+  },
+  "current_job": {
+    "running": true,
+    "job_id": "job_20260201_143000",
+    "tiles_processed": 15,
+    "tiles_total": 50
+  },
+  "database": {
+    "total_entries": 125000,
+    "entries_with_dates": 118000,
+    "unique_tiles": 156
+  }
+}
+```
+
+#### List Tiles
+
+```
+GET /api/tiles
+```
+
+List tiles with metadata and pagination.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| priority | string | - | Filter by priority (high/medium/low) |
+| has_data | boolean | - | Filter by whether tile has data |
+| page | integer | 1 | Page number |
+| per_page | integer | 100 | Items per page (max 500) |
+
+**Response:**
+```json
+{
+  "tiles": [
+    {
+      "tile_id": "tile_126_78",
+      "bbox": [-1.70, 53.80, -1.65, 53.85],
+      "priority": "high",
+      "has_data": true,
+      "location_count": 1250,
+      "last_updated": "2026-02-01T12:00:00Z"
+    }
+  ],
+  "total": 44000,
+  "page": 1,
+  "per_page": 100,
+  "pages": 440
+}
+```
+
+#### Get Tile Data
+
+```
+GET /api/tiles/{tile_id}/data
+```
+
+Returns GeoJSON data for a specific tile.
+
+**Query Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| format | string | points | Output format: "points" or "roads" |
+
+**Response:** GeoJSON FeatureCollection
+
+```json
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [-1.65, 53.80]
+      },
+      "properties": {
+        "date": "2023-06-15",
+        "color": "#00ff00"
+      }
+    }
+  ]
+}
+```
+
+#### Trigger Update Job
+
+```
+POST /api/update/trigger
+```
+
+Manually trigger a tile update job. Requires API key.
+
+**Request Body:**
+```json
+{
+  "priority": "high",
+  "tile_limit": 20
+}
+```
+
+**Response (200):**
+```json
+{
+  "status": "started",
+  "job_id": "job_20260202_143000",
+  "message": "Update job started"
+}
+```
+
+**Response (409 - Job already running):**
+```json
+{
+  "error": "Conflict",
+  "message": "Update job already running"
+}
+```
+
+#### Get Update Status
+
+```
+GET /api/update/status
+```
+
+Get current update job progress or last completed job info.
+
+**Response (job running):**
+```json
+{
+  "running": true,
+  "job_id": "job_20260202_143000",
+  "started_at": "2026-02-02T14:30:00Z",
+  "tiles_processed": 15,
+  "tiles_total": 50,
+  "percent_complete": 30.0,
+  "current_tile": "tile_126_78"
+}
+```
+
+#### Get Configuration
+
+```
+GET /api/config
+```
+
+Returns current configuration (sensitive values masked).
+
+**Response:**
+```json
+{
+  "scheduler": {
+    "enabled": true,
+    "interval_hours": 24,
+    "next_run": "2026-02-02T02:00:00Z"
+  },
+  "update": {
+    "batch_size": 50,
+    "concurrency": 20,
+    "min_age_for_recheck_days": 90,
+    "overpass_delay_seconds": 2,
+    "samples_per_road": 5,
+    "adaptive_sampling": true
+  }
+}
+```
+
+#### Update Configuration
+
+```
+POST /api/config
+```
+
+Update configuration values. Requires API key.
+
+**Request Body:**
+```json
+{
+  "scheduler": {
+    "interval_hours": 12
+  },
+  "update": {
+    "batch_size": 100
+  }
+}
+```
+
+#### List Cities
+
+```
+GET /api/cities
+```
+
+List UK cities with bounding boxes.
+
+**Query Parameters:**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| priority | string | Filter by priority level |
+
+---
+
+## Configuration
+
+Configuration is managed via `config.yaml` with environment variable substitution:
+
+```yaml
+app:
+  host: 0.0.0.0
+  port: 5000
+  api_key: ${API_KEY:-changeme}
+  debug: false
+
+database:
+  url: ${DATABASE_URL}
+
+google:
+  api_key: ${GOOGLE_MAPS_API_KEY}
+
+scheduler:
+  enabled: true
+  interval_hours: 24
+  # Or use cron: "0 2 * * *"
+
+update:
+  batch_size: 50
+  concurrency: 20
+  min_age_for_recheck_days: 90
+  overpass_delay_seconds: 2
+  samples_per_road: 5
+  adaptive_sampling: true
+
+logging:
+  level: INFO
+  file: logs/heatmap_app.log
+```
+
+---
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GOOGLE_MAPS_API_KEY` | Yes | Google Maps API key for Street View |
+| `DATABASE_URL` | Yes (web) | PostgreSQL connection string |
+| `API_KEY` | No | API key for write operations (default: changeme) |
+| `HEATMAP_DB` | No | SQLite path for CLI (default: metadata.db) |
+
+---
+
+## Database Setup
+
+### Docker (Recommended)
 
 ```bash
 # Start PostgreSQL with PostGIS
 docker-compose up -d postgres
 
-# Set DATABASE_URL
+# Set connection string
 export DATABASE_URL=postgresql://streetview:streetview_dev@localhost:5432/streetview
 
-# Migrate existing data (if any)
-python migrate_to_postgres.py --sqlite-path metadata.db
-
-# Optional: Start pgAdmin for database management
-docker-compose --profile tools up -d pgadmin
-# Access at http://localhost:5050 (admin@local.dev / admin)
+# Run migrations
+python migrations/001_create_job_status.py
 ```
 
-#### Manual PostgreSQL Setup
+### Manual PostgreSQL
 
-1. Install PostgreSQL with PostGIS extension
-2. Create database and enable PostGIS:
-   ```sql
-   CREATE DATABASE streetview;
-   \c streetview
-   CREATE EXTENSION postgis;
-   ```
-3. Set the DATABASE_URL environment variable:
-   ```bash
-   export DATABASE_URL=postgresql://user:password@localhost:5432/streetview
-   ```
+```sql
+CREATE DATABASE streetview;
+\c streetview
+CREATE EXTENSION postgis;
+```
 
-The database schema is created automatically on first run.
-
-#### Migrating Existing Data
-
-If you have existing data in SQLite, migrate it to PostgreSQL:
+### Migrating from SQLite
 
 ```bash
-# Dry run first
-python migrate_to_postgres.py --sqlite-path metadata.db --dry-run
-
-# Run migration
 python migrate_to_postgres.py --sqlite-path metadata.db
 ```
 
-The migration script:
-- Reads all data from SQLite
-- Computes tile IDs for each location
-- Creates PostGIS spatial indexes
-- Sets default priority to "medium" for migrated data
+---
 
-## Geographic Scope
+## Background Scheduler
 
-The project includes pre-defined geographic data for UK-wide coverage:
+The web backend includes an automated scheduler that processes tiles based on a smart refresh strategy:
 
-### UK Major Cities
+1. **High priority tiles** with locations never checked
+2. **High priority tiles** with locations >3 years old
+3. **Medium priority tiles** with locations >3 years old
+4. **High priority tiles** with locations >1 year old
+5. **Medium priority tiles** with locations >1 year old
+6. **Low priority tiles** (if time permits)
 
-Over 100 UK cities are defined in `geographic_scope.py` with priorities:
-- **High**: Major metropolitan areas (London, Birmingham, Manchester, etc.)
-- **Medium**: Regional centres (York, Oxford, Brighton, etc.)
-- **Low**: Smaller towns
+The scheduler respects Overpass API rate limits with configurable delays.
 
-### Road Type Priorities
-
-Roads are classified by OSM highway type:
-- **High**: motorway, trunk, primary
-- **Medium**: secondary, tertiary
-- **Low**: residential, unclassified
-
-### Tile System
-
-The UK is divided into ~0.05° x 0.05° tiles (~5km x 5km) for efficient processing:
-- UK bounds: -8.0°W to 2.0°E, 49.9°N to 60.9°N
-- Approximately 44,000 tiles cover the UK
-- Each tile has a priority based on whether it contains a city
-
-## Usage
-
-`generate_heatmap.py` downloads roads from the Overpass API, queries Street View
-metadata for each road and writes `heatmap.html` by default. You can adjust the
-bounding box, sampling step, the number of samples per road and the request
-concurrency using command-line options. The step value determines the spacing of
-the grid of points used to query Street View. It must be a positive number.
-
-```bash
-export GOOGLE_MAPS_API_KEY=YOUR_KEY
-python generate_heatmap.py \
-  --bbox -1.70 53.79 -1.65 53.82 \
-  --step 0.005 \
-  --samples 5 \
-  --concurrency 5 \
-  --output heatmap.html \
-  --csv results.csv \
-  --db metadata.db
-```
-
-Open `heatmap.html` in a browser to view the map. Road segments are coloured
-from green (recent imagery) to red (older imagery). The bounding box,
-sampling step, sample count and concurrency can be edited in the script if you
-wish to target different areas or query more detail.
-
-The map includes a small legend that explains what each colour represents, so
-you can quickly interpret how recent the imagery is. Hover over a road segment
-to see its name and the Street View capture date.
-
-`update_heatmaps.py` processes multiple bounding boxes from a JSON or GeoJSON
-file. It repeatedly generates heatmaps for each box and can run at regular
-intervals.
-
-```bash
-python update_heatmaps.py \
-  --bbox-file boxes.json \
-  --output-dir output \
-  --step 0.005 \
-  --interval 86400
-```
+---
 
 ## Testing
 
-Run all tests:
-
 ```bash
+# Run all tests
 pytest
+
+# Run with coverage
+pytest --cov=app --cov-report=html
+
+# Run specific test files
+pytest tests/test_api.py
+pytest tests/test_scheduler.py
+pytest tests/test_processing.py
+pytest tests/test_config.py
 ```
 
-Run specific test files:
+---
+
+## Example API Requests
 
 ```bash
-# Database tests (SQLite)
-pytest tests/test_database.py
+# Health check
+curl http://localhost:5000/api/health
 
-# Geographic scope tests
-pytest tests/test_geographic_scope.py
+# Get system status
+curl http://localhost:5000/api/status
 
-# Migration tests
-pytest tests/test_migration.py
+# List high-priority tiles with data
+curl "http://localhost:5000/api/tiles?priority=high&has_data=true&per_page=10"
+
+# Get tile GeoJSON data
+curl http://localhost:5000/api/tiles/tile_126_78/data
+
+# Trigger update job (requires API key)
+curl -X POST http://localhost:5000/api/update/trigger \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"priority": "high", "tile_limit": 10}'
+
+# Check update job status
+curl http://localhost:5000/api/update/status
+
+# Get configuration
+curl http://localhost:5000/api/config
+
+# List cities
+curl http://localhost:5000/api/cities
 ```
 
-For PostgreSQL integration tests, set DATABASE_URL and run:
+---
 
-```bash
-DATABASE_URL=postgresql://... pytest tests/test_migration.py -k "postgres"
+## Project Structure
+
+```
+streetview-heatmap/
+├── app/
+│   ├── __init__.py      # Flask app factory
+│   ├── routes.py        # API endpoints
+│   ├── models.py        # Pydantic validation models
+│   ├── scheduler.py     # Background job scheduler
+│   └── processing.py    # Core processing logic
+├── migrations/
+│   └── 001_create_job_status.py
+├── tests/
+│   ├── test_api.py
+│   ├── test_scheduler.py
+│   ├── test_processing.py
+│   └── test_config.py
+├── config.py            # Configuration management
+├── config.yaml          # Default configuration
+├── database.py          # Database abstraction
+├── geographic_scope.py  # UK cities and tile system
+├── generate_heatmap.py  # CLI tool
+├── run.py               # Web app entry point
+└── requirements.txt
 ```
 
-## Version control
+---
 
-Temporary files such as Python bytecode caches and test artifacts are listed in `.gitignore` so they are not committed to the repository.
+## Geographic Coverage
 
+### UK Major Cities (130+)
+
+Defined in `geographic_scope.py` with priority levels:
+- **High**: London, Birmingham, Manchester, Leeds, Glasgow, Liverpool, etc.
+- **Medium**: York, Oxford, Brighton, Cambridge, etc.
+- **Low**: Smaller towns
+
+### Tile System
+
+- UK bounds: -8.0°W to 2.0°E, 49.9°N to 60.9°N
+- Tile size: 0.05° x 0.05° (~5km x 5km)
+- ~44,000 tiles cover the UK
+- Priority based on city overlap
+
+---
+
+## License
+
+MIT License
