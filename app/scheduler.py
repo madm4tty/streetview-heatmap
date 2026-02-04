@@ -214,12 +214,14 @@ def _get_tiles_to_process(
     """Determine which tiles to process based on smart refresh strategy.
 
     Priority order:
-    1. High priority tiles with locations never checked
-    2. High priority tiles with locations >3 years old
-    3. Medium priority tiles with locations >3 years old
-    4. High priority tiles with locations >1 year old
-    5. Medium priority tiles with locations >1 year old
-    6. Low priority tiles (only if time permits)
+    1. High priority tiles never processed (not in metadata)
+    2. Medium priority tiles never processed (not in metadata)
+    3. High priority tiles with stale data (>3 years old)
+    4. Medium priority tiles with stale data (>3 years old)
+    5. High priority tiles with data >1 year old
+    6. Medium priority tiles with data >1 year old
+    7. Low priority tiles never processed
+    8. Low priority tiles with stale data (>min_age_days)
 
     Args:
         priority_filter: Optional filter by priority level
@@ -229,66 +231,87 @@ def _get_tiles_to_process(
     Returns:
         List of tile IDs to process
     """
+    # Get all available tiles from geographic scope
+    all_tiles = generate_uk_tiles()
+
+    if priority_filter:
+        priorities = [priority_filter]
+    else:
+        priorities = ["high", "medium", "low"]
+
+    # Filter by priority
+    available_tiles = [t for t in all_tiles if t["priority"] in priorities]
+
+    limit = tile_limit or 50  # Default limit
+
     if not database.is_postgresql():
-        # Fallback: just return some tiles
-        all_tiles = generate_uk_tiles()
-        if priority_filter:
-            all_tiles = [t for t in all_tiles if t["priority"] == priority_filter]
-        tile_ids = [t["tile_id"] for t in all_tiles]
-        return tile_ids[:tile_limit] if tile_limit else tile_ids
+        # Fallback: just return tiles by priority
+        tile_ids = [t["tile_id"] for t in available_tiles]
+        return tile_ids[:limit]
 
     tiles_to_process = []
-    limit = tile_limit or 50  # Default limit
 
     try:
         with database._conn.cursor() as cur:
-            # Get tiles with stale locations grouped by priority
-            # This query finds tiles that need updating
+            # Get set of tiles that already exist in metadata
+            cur.execute("SELECT DISTINCT tile_id FROM metadata")
+            existing_tiles = {row[0] for row in cur.fetchall()}
 
-            if priority_filter:
-                priorities = [priority_filter]
-            else:
-                priorities = ["high", "medium", "low"]
-
-            age_thresholds = [
-                (3 * 365, "high"),    # High priority > 3 years
-                (3 * 365, "medium"),  # Medium priority > 3 years
-                (365, "high"),        # High priority > 1 year
-                (365, "medium"),      # Medium priority > 1 year
-                (min_age_days, "low") # Low priority > min_age
-            ]
-
-            for age_days, priority in age_thresholds:
+            # Phase 1: Add tiles that have NEVER been processed (highest priority)
+            # These are tiles in geographic scope but not in metadata
+            for priority in ["high", "medium", "low"]:
                 if priority not in priorities:
                     continue
                 if len(tiles_to_process) >= limit:
                     break
 
-                cutoff = datetime.utcnow() - timedelta(days=age_days)
+                # Find tiles of this priority that don't exist in metadata
+                for tile in available_tiles:
+                    if tile["priority"] == priority and tile["tile_id"] not in existing_tiles:
+                        if tile["tile_id"] not in tiles_to_process:
+                            tiles_to_process.append(tile["tile_id"])
+                            if len(tiles_to_process) >= limit:
+                                break
 
-                # Find tiles with old data
-                cur.execute("""
-                    SELECT DISTINCT tile_id
-                    FROM metadata
-                    WHERE priority = %s
-                    AND (last_checked IS NULL OR last_checked < %s)
-                    AND tile_id NOT IN %s
-                    LIMIT %s
-                """, (priority, cutoff,
-                      tuple(tiles_to_process) if tiles_to_process else ('',),
-                      limit - len(tiles_to_process)))
+            # Phase 2: Add tiles with stale data that need refreshing
+            if len(tiles_to_process) < limit:
+                age_thresholds = [
+                    (3 * 365, "high"),    # High priority > 3 years
+                    (3 * 365, "medium"),  # Medium priority > 3 years
+                    (365, "high"),        # High priority > 1 year
+                    (365, "medium"),      # Medium priority > 1 year
+                    (min_age_days, "low") # Low priority > min_age
+                ]
 
-                for row in cur.fetchall():
-                    if row[0] and row[0] not in tiles_to_process:
-                        tiles_to_process.append(row[0])
+                for age_days, priority in age_thresholds:
+                    if priority not in priorities:
+                        continue
+                    if len(tiles_to_process) >= limit:
+                        break
+
+                    cutoff = datetime.utcnow() - timedelta(days=age_days)
+
+                    # Find tiles with old data
+                    cur.execute("""
+                        SELECT DISTINCT tile_id
+                        FROM metadata
+                        WHERE priority = %s
+                        AND (last_checked IS NULL OR last_checked < %s)
+                        AND tile_id NOT IN %s
+                        LIMIT %s
+                    """, (priority, cutoff,
+                          tuple(tiles_to_process) if tiles_to_process else ('',),
+                          limit - len(tiles_to_process)))
+
+                    for row in cur.fetchall():
+                        if row[0] and row[0] not in tiles_to_process:
+                            tiles_to_process.append(row[0])
 
     except Exception as e:
         logger.error("Failed to get tiles to process: %s", e)
-        # Fallback to basic tile selection
-        all_tiles = generate_uk_tiles()
-        if priority_filter:
-            all_tiles = [t for t in all_tiles if t["priority"] == priority_filter]
-        tiles_to_process = [t["tile_id"] for t in all_tiles[:limit]]
+        # Fallback to basic tile selection (unprocessed tiles first)
+        tile_ids = [t["tile_id"] for t in available_tiles]
+        tiles_to_process = tile_ids[:limit]
 
     logger.info("Selected %d tiles for processing", len(tiles_to_process))
     return tiles_to_process

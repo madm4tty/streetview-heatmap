@@ -2,8 +2,7 @@
 
 Provides routes for the web frontend including:
 - Map view (index)
-- Dashboard
-- Configuration
+- Dashboard (read-only monitoring)
 - Instructions
 """
 
@@ -31,16 +30,6 @@ def dashboard():
     progress, and recent activity.
     """
     return render_template('dashboard.html')
-
-
-@pages_bp.route('/config')
-def config_page():
-    """Configuration panel.
-
-    Allows authenticated users to modify scheduler and
-    update settings.
-    """
-    return render_template('config.html')
 
 
 @pages_bp.route('/instructions')

@@ -15,7 +15,6 @@ const Dashboard = (function() {
     // ===== State =====
     let refreshInterval = null;
     let isJobRunning = false;
-    let pendingAction = null;
 
     // ===== Initialization =====
 
@@ -23,98 +22,8 @@ const Dashboard = (function() {
      * Initialize the dashboard
      */
     function init() {
-        setupModals();
         loadDashboardData();
         startAutoRefresh();
-    }
-
-    /**
-     * Setup modal dialogs
-     */
-    function setupModals() {
-        // API Key Modal
-        setupModal('apikey-modal', () => {
-            const input = document.getElementById('apikey-input');
-            const key = input.value.trim();
-            if (key) {
-                api.setApiKey(key);
-                showNotification('API key saved', 'success');
-                closeModal('apikey-modal');
-
-                // Execute pending action if any
-                if (pendingAction) {
-                    pendingAction();
-                    pendingAction = null;
-                }
-            }
-        });
-
-        // Update Modal
-        setupModal('update-modal', async () => {
-            await triggerUpdate();
-        });
-    }
-
-    /**
-     * Setup a modal with open/close handlers
-     */
-    function setupModal(modalId, onConfirm) {
-        const modal = document.getElementById(modalId);
-        const backdrop = document.getElementById(`${modalId}-backdrop`);
-        const closeBtn = document.getElementById(`${modalId}-close`);
-        const cancelBtn = document.getElementById(`${modalId}-cancel`);
-        const confirmBtn = document.getElementById(`${modalId}-confirm`);
-
-        // Close handlers
-        [backdrop, closeBtn, cancelBtn].forEach(el => {
-            if (el) {
-                el.addEventListener('click', () => closeModal(modalId));
-            }
-        });
-
-        // Confirm handler
-        if (confirmBtn) {
-            confirmBtn.addEventListener('click', onConfirm);
-        }
-
-        // Close on escape
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && modal.classList.contains('show')) {
-                closeModal(modalId);
-            }
-        });
-    }
-
-    /**
-     * Open a modal
-     */
-    function openModal(modalId) {
-        const modal = document.getElementById(modalId);
-        const backdrop = document.getElementById(`${modalId}-backdrop`);
-
-        if (modal && backdrop) {
-            backdrop.classList.add('show');
-            modal.classList.add('show');
-
-            // Focus first input
-            const input = modal.querySelector('input, select');
-            if (input) {
-                setTimeout(() => input.focus(), 100);
-            }
-        }
-    }
-
-    /**
-     * Close a modal
-     */
-    function closeModal(modalId) {
-        const modal = document.getElementById(modalId);
-        const backdrop = document.getElementById(`${modalId}-backdrop`);
-
-        if (modal && backdrop) {
-            backdrop.classList.remove('show');
-            modal.classList.remove('show');
-        }
     }
 
     // ===== Data Loading =====
@@ -155,6 +64,7 @@ const Dashboard = (function() {
 
         const schedulerEnabled = status.scheduler?.enabled ?? false;
         const nextUpdate = status.scheduler?.next_run;
+        const intervalHours = status.scheduler?.interval_hours;
 
         container.innerHTML = `
             <div class="d-flex flex-wrap gap-md">
@@ -169,6 +79,7 @@ const Dashboard = (function() {
                     <div class="mb-md">
                         <div class="text-small text-muted mb-sm">Scheduler</div>
                         <span class="badge ${schedulerEnabled ? 'badge-success' : 'badge-secondary'}">${schedulerEnabled ? 'Enabled' : 'Disabled'}</span>
+                        ${intervalHours ? `<span class="text-small text-muted ml-sm">(every ${intervalHours}h)</span>` : ''}
                     </div>
                     <div>
                         <div class="text-small text-muted mb-sm">Next Scheduled Update</div>
@@ -180,32 +91,9 @@ const Dashboard = (function() {
                         <div class="text-small text-muted mb-sm">Last Update</div>
                         <span>${status.last_update ? formatTimestamp(status.last_update, { relative: true }) : 'Never'}</span>
                     </div>
-                    <div>
-                        <button class="btn btn-primary" id="trigger-update-btn">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-                                <path d="M23 4v6h-6"/>
-                                <path d="M1 20v-6h6"/>
-                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                            </svg>
-                            Trigger Update
-                        </button>
-                    </div>
                 </div>
             </div>
         `;
-
-        // Setup trigger button
-        const triggerBtn = document.getElementById('trigger-update-btn');
-        if (triggerBtn) {
-            triggerBtn.addEventListener('click', () => {
-                if (!api.isAuthenticated()) {
-                    pendingAction = () => openModal('update-modal');
-                    openModal('apikey-modal');
-                } else {
-                    openModal('update-modal');
-                }
-            });
-        }
     }
 
     /**
@@ -225,7 +113,7 @@ const Dashboard = (function() {
                         </svg>
                     </div>
                     <p class="empty-state-title">No Active Job</p>
-                    <p class="empty-state-text text-muted">The system is idle. Trigger an update to start processing.</p>
+                    <p class="empty-state-text text-muted">The system is idle. Updates run automatically when the scheduler is enabled.</p>
                 </div>
             `;
             return;
@@ -392,45 +280,6 @@ const Dashboard = (function() {
                 </table>
             </div>
         `;
-    }
-
-    // ===== Actions =====
-
-    /**
-     * Trigger a manual update
-     */
-    async function triggerUpdate() {
-        const prioritySelect = document.getElementById('update-priority');
-        const limitInput = document.getElementById('update-limit');
-
-        const options = {};
-        if (prioritySelect.value !== 'all') {
-            options.priority_filter = prioritySelect.value;
-        }
-        if (limitInput.value) {
-            options.tile_limit = parseInt(limitInput.value, 10);
-        }
-
-        try {
-            closeModal('update-modal');
-            showNotification('Starting update...', 'info');
-
-            await api.triggerUpdate(options);
-            showNotification('Update started successfully', 'success');
-
-            // Refresh dashboard
-            await loadDashboardData();
-        } catch (error) {
-            console.error('Failed to trigger update:', error);
-
-            if (error.isAuthError && error.isAuthError()) {
-                api.clearApiKey();
-                showNotification('Invalid API key. Please re-authenticate.', 'error');
-                openModal('apikey-modal');
-            } else {
-                showNotification('Failed to start update: ' + error.message, 'error');
-            }
-        }
     }
 
     // ===== Auto-Refresh =====
