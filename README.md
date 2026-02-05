@@ -5,7 +5,6 @@ This project visualizes the age of Google Street View imagery across UK road net
 ## Features
 
 - **Interactive Web Frontend**: Full-featured web interface with interactive map
-- **CLI Tool**: Generate heatmaps for specific bounding boxes
 - **REST API**: Web backend with automated scheduling
 - **PostgreSQL/PostGIS**: Spatial database for UK-wide coverage
 - **Smart Refresh**: Priority-based tile processing with age tracking
@@ -32,19 +31,6 @@ pip install -r requirements.txt
 # Create .env file
 cp .env.example .env
 # Edit .env with your API keys
-```
-
-### CLI Usage (Local Development)
-
-```bash
-# Set API key
-export GOOGLE_MAPS_API_KEY=YOUR_KEY
-
-# Generate heatmap for a specific area
-python generate_heatmap.py \
-  --bbox -1.70 53.79 -1.65 53.82 \
-  --samples 5 \
-  --output heatmap.html
 ```
 
 ### Web Backend
@@ -458,7 +444,6 @@ logging:
 | `GOOGLE_MAPS_API_KEY` | Yes | Google Maps API key for Street View |
 | `DATABASE_URL` | Yes (web) | PostgreSQL connection string |
 | `API_KEY` | No | API key for write operations (default: changeme) |
-| `HEATMAP_DB` | No | SQLite path for CLI (default: metadata.db) |
 
 ---
 
@@ -483,12 +468,6 @@ python migrations/001_create_job_status.py
 CREATE DATABASE streetview;
 \c streetview
 CREATE EXTENSION postgis;
-```
-
-### Migrating from SQLite
-
-```bash
-python migrate_to_postgres.py --sqlite-path metadata.db
 ```
 
 ---
@@ -599,7 +578,6 @@ streetview-heatmap/
 ├── config.yaml             # Default configuration
 ├── database.py             # Database abstraction
 ├── geographic_scope.py     # UK cities and tile system
-├── generate_heatmap.py     # CLI tool
 ├── run.py                  # Web app entry point
 └── requirements.txt
 ```
