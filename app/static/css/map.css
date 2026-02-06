@@ -647,6 +647,11 @@
     color: var(--text-secondary);
 }
 
+.coord-separator {
+    margin: 0 var(--spacing-xs);
+    color: var(--border-color);
+}
+
 @media (max-width: 640px) {
     .coordinate-display {
         display: none;

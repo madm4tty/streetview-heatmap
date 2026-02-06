@@ -157,6 +157,9 @@
         });
 
         // Update navigation status indicator
+        let statusFailCount = 0;
+        const STATUS_FAIL_THRESHOLD = 2; // Show offline after 2 consecutive failures
+
         async function updateNavStatus() {
             const dot = document.getElementById('status-dot');
             const text = document.getElementById('status-text');
@@ -164,6 +167,7 @@
 
             try {
                 const status = await api.getStatus();
+                statusFailCount = 0;
 
                 // Update status dot
                 dot.className = 'status-dot';
@@ -182,9 +186,13 @@
                     lastUpdate.textContent = 'Never';
                 }
             } catch (error) {
-                dot.className = 'status-dot status-error';
-                text.textContent = 'Offline';
-                lastUpdate.textContent = '--';
+                statusFailCount++;
+                if (statusFailCount >= STATUS_FAIL_THRESHOLD) {
+                    dot.className = 'status-dot status-error';
+                    text.textContent = 'Offline';
+                    lastUpdate.textContent = '--';
+                }
+                // On first failure, keep the previous state visible
             }
         }
     </script>

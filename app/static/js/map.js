@@ -73,6 +73,9 @@ const HeatmapMap = (function() {
             // Initial tile load
             loadVisibleTiles();
 
+            // Set initial zoom display
+            updateZoomDisplay(map.getZoom());
+
             // Hide loading overlay
             hideLoading();
         } catch (error) {
@@ -90,9 +93,12 @@ const HeatmapMap = (function() {
             zoom: CONFIG.initialZoom,
             minZoom: CONFIG.minZoom,
             maxZoom: CONFIG.maxZoom,
-            zoomControl: true,
+            zoomControl: false,
             attributionControl: true
         });
+
+        // Add zoom control to bottom-right to avoid overlapping search box
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
 
         // Add OpenStreetMap tile layer
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -564,15 +570,20 @@ const HeatmapMap = (function() {
     function handleZoomChange() {
         const zoom = map.getZoom();
 
-        // Show/hide zoom message
-        if (zoom < CONFIG.minZoomForRoads) {
-            // Could show a message to zoom in
-        }
+        // Update zoom level display
+        updateZoomDisplay(zoom);
 
         // Reload grid if visible
         const gridCheckbox = document.getElementById('layer-grid');
         if (gridCheckbox && gridCheckbox.checked) {
             loadVisibleGrid();
+        }
+    }
+
+    function updateZoomDisplay(zoom) {
+        const coordZoom = document.getElementById('coord-zoom');
+        if (coordZoom) {
+            coordZoom.textContent = zoom;
         }
     }
 
