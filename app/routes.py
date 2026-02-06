@@ -121,18 +121,22 @@ def get_status():
 
         # Calculate coverage by priority
         coverage = {}
+        all_tiles = generate_uk_tiles()
+        tiles_by_priority = {}
+        for t in all_tiles:
+            tiles_by_priority.setdefault(t['priority'], []).append(t)
+
         for priority in ['high', 'medium', 'low']:
             priority_data = coverage_stats.get('by_priority', {}).get(priority, {})
             total_entries = priority_data.get('total_entries', 0)
             with_date = priority_data.get('entries_with_date', 0)
             tiles = priority_data.get('tiles_covered', 0)
 
-            # Estimate total tiles for this priority
-            all_tiles = generate_uk_tiles()
-            priority_tiles = [t for t in all_tiles if t['priority'] == priority]
-            total_tiles = len(priority_tiles)
+            total_tiles = len(tiles_by_priority.get(priority, []))
 
             coverage[priority] = {
+                "total": total_tiles,
+                "with_data": tiles,
                 "total_tiles": total_tiles,
                 "tiles_with_data": tiles,
                 "locations_total": total_entries,
@@ -144,20 +148,35 @@ def get_status():
         current_job = get_current_job()
         if current_job:
             job_info = {
+                "status": "running",
                 "running": True,
                 "job_id": current_job.get("job_id"),
                 "started_at": current_job.get("started_at").isoformat() + "Z" if current_job.get("started_at") else None,
-                "priority": current_job.get("priority_filter"),
+                "priority_filter": current_job.get("priority_filter"),
                 "tiles_processed": current_job.get("tiles_processed", 0),
                 "tiles_total": current_job.get("tiles_total"),
                 "locations_updated": current_job.get("locations_updated", 0)
             }
         else:
-            job_info = {"running": False}
+            job_info = {"status": "idle", "running": False}
 
         # Get last update and next scheduled update
         last_job = get_last_completed_job()
         last_update = last_job.get("completed_at").isoformat() + "Z" if last_job and last_job.get("completed_at") else None
+
+        # Format last job info for frontend
+        last_job_info = None
+        if last_job:
+            last_job_info = {
+                "job_id": last_job.get("job_id"),
+                "status": last_job.get("status"),
+                "started_at": last_job.get("started_at").isoformat() + "Z" if last_job.get("started_at") else None,
+                "completed_at": last_job.get("completed_at").isoformat() + "Z" if last_job.get("completed_at") else None,
+                "priority_filter": last_job.get("priority_filter"),
+                "tiles_processed": last_job.get("tiles_processed", 0),
+                "locations_updated": last_job.get("locations_updated", 0),
+                "api_calls": last_job.get("api_calls", 0)
+            }
 
         next_run = get_next_run_time()
         next_update = next_run.isoformat() + "Z" if next_run else None
@@ -166,15 +185,22 @@ def get_status():
         db_stats = database.get_cache_stats()
         unique_tiles = coverage_stats.get('total_tiles_with_data', 0)
 
+        total_entries = db_stats.get("total_entries", 0)
+        with_dates = db_stats.get("entries_with_date", 0)
+
         response = {
             "status": "running",
             "last_update": last_update,
             "next_update": next_update,
             "coverage": coverage,
             "current_job": job_info,
+            "last_job": last_job_info,
+            "total_entries": total_entries,
+            "with_dates": with_dates,
+            "tiles_covered": unique_tiles,
             "database": {
-                "total_entries": db_stats.get("total_entries", 0),
-                "entries_with_dates": db_stats.get("entries_with_date", 0),
+                "total_entries": total_entries,
+                "entries_with_dates": with_dates,
                 "unique_tiles": unique_tiles
             }
         }
@@ -230,7 +256,8 @@ def list_tiles():
             try:
                 with database._conn.cursor() as cur:
                     cur.execute("""
-                        SELECT tile_id, COUNT(*), MAX(last_checked)
+                        SELECT tile_id, COUNT(*), MAX(last_checked),
+                               COUNT(CASE WHEN date IS NOT NULL AND date != '' THEN 1 END)
                         FROM metadata
                         WHERE tile_id IS NOT NULL
                         GROUP BY tile_id
@@ -238,7 +265,8 @@ def list_tiles():
                     for row in cur.fetchall():
                         tile_data[row[0]] = {
                             "location_count": row[1],
-                            "last_updated": row[2]
+                            "last_updated": row[2],
+                            "with_dates": row[3]
                         }
             except Exception as e:
                 logger.warning("Failed to get tile data: %s", e)
@@ -254,12 +282,16 @@ def list_tiles():
             if has_data is not None and tile_has_data != has_data:
                 continue
 
+            bbox = list(tile['bbox'])
             tiles_list.append({
                 "tile_id": tile_id,
-                "bbox": list(tile['bbox']),
+                "bbox": bbox,
+                "lat": bbox[1],
+                "lon": bbox[0],
                 "priority": tile['priority'],
                 "has_data": tile_has_data,
                 "location_count": data.get("location_count", 0),
+                "with_dates": data.get("with_dates", 0),
                 "last_updated": data.get("last_updated").isoformat() + "Z" if data.get("last_updated") else None
             })
 
