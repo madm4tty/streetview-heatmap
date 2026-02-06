@@ -26,12 +26,18 @@ const HeatmapMap = (function() {
         // Maximum tiles to load at once
         maxTilesPerLoad: 50,
 
-        // UK bounding box
+        // UK bounding box (display bounds for map constraint)
         ukBounds: {
             north: 60.85,
             south: 49.85,
             east: 1.77,
             west: -8.18
+        },
+
+        // UK tile grid origin (must match backend geographic_scope.py UK_BOUNDS)
+        tileOrigin: {
+            minLon: -8.0,
+            minLat: 49.9
         }
     };
 
@@ -41,6 +47,7 @@ const HeatmapMap = (function() {
     let gridLayer = null;
     let loadedTiles = new Set();
     let loadingTiles = new Set();
+    let failedTiles = new Set();
     let cities = [];
 
     // UI Elements
@@ -88,13 +95,18 @@ const HeatmapMap = (function() {
      * Create the Leaflet map
      */
     function createMap() {
+        // preferCanvas draws all CircleMarkers onto a single <canvas>
+        // element instead of creating thousands of individual SVG nodes.
+        // This dramatically improves pan/zoom performance when displaying
+        // large numbers of data points.
         map = L.map('map', {
             center: CONFIG.center,
             zoom: CONFIG.initialZoom,
             minZoom: CONFIG.minZoom,
             maxZoom: CONFIG.maxZoom,
             zoomControl: false,
-            attributionControl: true
+            attributionControl: true,
+            preferCanvas: true
         });
 
         // Add zoom control to bottom-right to avoid overlapping search box
@@ -329,7 +341,8 @@ const HeatmapMap = (function() {
         const bounds = map.getBounds();
         const visibleTileIds = getVisibleTileIds(bounds);
 
-        // Filter out already loaded tiles
+        // Filter out already loaded and currently loading tiles
+        // Allow failed tiles to retry
         const tilesToLoad = visibleTileIds.filter(id =>
             !loadedTiles.has(id) && !loadingTiles.has(id)
         );
@@ -347,11 +360,10 @@ const HeatmapMap = (function() {
         // Mark as loading
         limitedTiles.forEach(id => loadingTiles.add(id));
 
-        // Load tiles in parallel
-        const loadPromises = limitedTiles.map(tileId => loadTileData(tileId));
-
+        // Load tiles in parallel — the points format reads from the
+        // database cache so there is no external API rate limit concern.
         try {
-            await Promise.all(loadPromises);
+            await Promise.all(limitedTiles.map(tileId => loadTileData(tileId)));
         } catch (error) {
             console.error('Error loading tiles:', error);
         }
@@ -361,7 +373,9 @@ const HeatmapMap = (function() {
     }
 
     /**
-     * Get tile IDs visible in the current bounds
+     * Get tile IDs visible in the current bounds.
+     * Generates IDs in the backend's "tile_{lonIdx}_{latIdx}" format
+     * using the same grid origin and tile size as geographic_scope.py.
      */
     function getVisibleTileIds(bounds) {
         const tileIds = [];
@@ -370,16 +384,19 @@ const HeatmapMap = (function() {
         const east = Math.min(bounds.getEast(), CONFIG.ukBounds.east);
         const west = Math.max(bounds.getWest(), CONFIG.ukBounds.west);
 
-        // Calculate tile range
-        const startLat = Math.floor(south / CONFIG.tileSize) * CONFIG.tileSize;
-        const startLon = Math.floor(west / CONFIG.tileSize) * CONFIG.tileSize;
-        const endLat = Math.ceil(north / CONFIG.tileSize) * CONFIG.tileSize;
-        const endLon = Math.ceil(east / CONFIG.tileSize) * CONFIG.tileSize;
+        const { minLon, minLat } = CONFIG.tileOrigin;
 
-        for (let lat = startLat; lat < endLat; lat += CONFIG.tileSize) {
-            for (let lon = startLon; lon < endLon; lon += CONFIG.tileSize) {
-                const tileId = `${lat.toFixed(2)}_${lon.toFixed(2)}`;
-                tileIds.push(tileId);
+        // Calculate index range for visible tiles
+        const startLonIdx = Math.floor((west - minLon) / CONFIG.tileSize);
+        const endLonIdx = Math.ceil((east - minLon) / CONFIG.tileSize);
+        const startLatIdx = Math.floor((south - minLat) / CONFIG.tileSize);
+        const endLatIdx = Math.ceil((north - minLat) / CONFIG.tileSize);
+
+        for (let lonIdx = startLonIdx; lonIdx < endLonIdx; lonIdx++) {
+            for (let latIdx = startLatIdx; latIdx < endLatIdx; latIdx++) {
+                if (lonIdx >= 0 && latIdx >= 0) {
+                    tileIds.push(`tile_${lonIdx}_${latIdx}`);
+                }
             }
         }
 
@@ -394,19 +411,29 @@ const HeatmapMap = (function() {
             const geojson = await api.getTileData(tileId);
             addGeoJSONToMap(geojson, tileId);
             loadedTiles.add(tileId);
+            failedTiles.delete(tileId);
         } catch (error) {
-            // Tile might not have data, that's okay
-            if (!error.isNotFound || !error.isNotFound()) {
+            if (error.isNotFound && error.isNotFound()) {
+                // 404 = tile genuinely has no data, don't retry
+                loadedTiles.add(tileId);
+            } else {
+                // Server/network error (e.g. Overpass 429/504) — allow retry
                 console.warn(`Failed to load tile ${tileId}:`, error.message);
+                failedTiles.add(tileId);
             }
-            loadedTiles.add(tileId); // Mark as loaded to avoid retrying
         } finally {
             loadingTiles.delete(tileId);
         }
     }
 
     /**
-     * Add GeoJSON data to the map
+     * Add GeoJSON data to the map.
+     *
+     * The default "points" format returns Point features from the database
+     * cache. Each point represents a sampled Street View location with a
+     * capture date. We render these as coloured CircleMarkers so coverage
+     * age is visible at a glance. If LineString features arrive (road
+     * format), they are styled as coloured road segments instead.
      */
     function addGeoJSONToMap(geojson, tileId) {
         if (!geojson || !geojson.features || geojson.features.length === 0) {
@@ -414,6 +441,10 @@ const HeatmapMap = (function() {
         }
 
         const layer = L.geoJSON(geojson, {
+            // pointToLayer is required for Point geometry — Leaflet ignores
+            // the "style" callback for Points and would show default markers.
+            pointToLayer: pointToLayer,
+            // style is used for LineString / Polygon features (road format)
             style: featureStyle,
             onEachFeature: onEachFeature
         });
@@ -422,7 +453,26 @@ const HeatmapMap = (function() {
     }
 
     /**
-     * Style function for GeoJSON features
+     * Convert a Point feature to a coloured CircleMarker.
+     * Leaflet calls this for every GeoJSON Point instead of creating
+     * a default pin marker.
+     */
+    function pointToLayer(feature, latlng) {
+        const date = feature.properties?.date || feature.properties?.capture_date;
+        const color = ageToColor(date);
+
+        return L.circleMarker(latlng, {
+            radius: 4,
+            fillColor: color,
+            color: color,
+            weight: 1,
+            opacity: 0.9,
+            fillOpacity: 0.8
+        });
+    }
+
+    /**
+     * Style function for LineString/Polygon GeoJSON features (road format)
      */
     function featureStyle(feature) {
         const date = feature.properties?.date || feature.properties?.capture_date;
@@ -442,24 +492,27 @@ const HeatmapMap = (function() {
      */
     function onEachFeature(feature, layer) {
         const props = feature.properties || {};
-        const name = props.name || props.road_name || 'Unknown Road';
         const date = props.date || props.capture_date;
         const formattedDate = date ? formatTimestamp(date, { includeTime: false }) : 'Unknown';
         const category = getAgeCategory(date);
 
-        // Tooltip on hover
-        layer.bindTooltip(`
-            <strong>${escapeHtml(name)}</strong><br>
-            ${formattedDate}
-        `, {
-            sticky: true,
-            direction: 'top'
-        });
+        // Extract coordinates for the Google Maps Street View link.
+        // GeoJSON coordinates are [lon, lat]; Google Maps expects lat,lon.
+        const coords = feature.geometry?.coordinates;
+        const lat = coords ? coords[1] : null;
+        const lon = coords ? coords[0] : null;
 
-        // Popup on click
+        // Build Google Maps Street View URL.
+        // The @lat,lon,... part positions the camera; layer=c activates SV.
+        const streetViewUrl = (lat && lon)
+            ? `https://www.google.com/maps/@${lat},${lon},3a,75y,0h,90t/data=!3m6!1e1!3m4!1s!2e0!7i16384!8i8192`
+            : null;
+
+        // Popup on click (no tooltip — tooltips on thousands of canvas
+        // markers fire constantly on mousemove and hurt performance)
         layer.bindPopup(`
             <div class="popup-content">
-                <h4 class="popup-title">${escapeHtml(name)}</h4>
+                <h4 class="popup-title">Street View Coverage</h4>
                 <ul class="popup-info">
                     <li>
                         <span class="popup-label">Capture Date</span>
@@ -474,24 +527,21 @@ const HeatmapMap = (function() {
                             </span>
                         </span>
                     </li>
-                    ${props.road_type ? `
+                    ${lat && lon ? `
                     <li>
-                        <span class="popup-label">Road Type</span>
-                        <span class="popup-value">${escapeHtml(props.road_type)}</span>
+                        <span class="popup-label">Coordinates</span>
+                        <span class="popup-value">${lat.toFixed(5)}, ${lon.toFixed(5)}</span>
                     </li>
                     ` : ''}
                 </ul>
+                ${streetViewUrl ? `
+                <a href="${streetViewUrl}" target="_blank" rel="noopener noreferrer"
+                   class="popup-streetview-link">
+                    Open in Google Street View &rarr;
+                </a>
+                ` : ''}
             </div>
         `);
-
-        // Highlight on hover
-        layer.on('mouseover', function() {
-            this.setStyle({ weight: 6 });
-        });
-
-        layer.on('mouseout', function() {
-            this.setStyle({ weight: 4 });
-        });
     }
 
     // ===== Coverage Grid =====
