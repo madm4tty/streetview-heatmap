@@ -206,6 +206,52 @@ def get_last_completed_job() -> Optional[Dict[str, Any]]:
     return None
 
 
+def get_recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
+    """Get the most recent completed or failed jobs from the database.
+
+    Args:
+        limit: Maximum number of jobs to return
+
+    Returns:
+        List of job dicts ordered by completed_at descending
+    """
+    if not database.is_postgresql():
+        return []
+
+    try:
+        with database._conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, job_id, status, started_at, completed_at,
+                       priority_filter, tile_limit, tiles_processed,
+                       tiles_total, locations_updated, api_calls, error_message
+                FROM job_status
+                WHERE status IN ('completed', 'failed')
+                ORDER BY completed_at DESC
+                LIMIT %s
+            """, (limit,))
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "job_id": row[1],
+                    "status": row[2],
+                    "started_at": row[3],
+                    "completed_at": row[4],
+                    "priority_filter": row[5],
+                    "tile_limit": row[6],
+                    "tiles_processed": row[7],
+                    "tiles_total": row[8],
+                    "locations_updated": row[9],
+                    "api_calls": row[10],
+                    "error_message": row[11]
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error("Failed to get recent jobs: %s", e)
+    return []
+
+
 def _get_tiles_to_process(
     priority_filter: Optional[str],
     tile_limit: Optional[int],

@@ -30,6 +30,7 @@ from app.scheduler import (
     get_current_job,
     get_last_completed_job,
     get_next_run_time,
+    get_recent_jobs,
     is_job_running,
     trigger_update_job,
     reschedule_job,
@@ -178,6 +179,22 @@ def get_status():
                 "api_calls": last_job.get("api_calls", 0)
             }
 
+        # Get recent jobs for activity feed
+        recent_jobs_raw = get_recent_jobs(limit=10)
+        recent_jobs_list = []
+        for rj in recent_jobs_raw:
+            recent_jobs_list.append({
+                "job_id": rj.get("job_id"),
+                "status": rj.get("status"),
+                "started_at": rj.get("started_at").isoformat() + "Z" if rj.get("started_at") else None,
+                "completed_at": rj.get("completed_at").isoformat() + "Z" if rj.get("completed_at") else None,
+                "priority_filter": rj.get("priority_filter"),
+                "tiles_processed": rj.get("tiles_processed", 0),
+                "locations_updated": rj.get("locations_updated", 0),
+                "api_calls": rj.get("api_calls", 0),
+                "error_message": rj.get("error_message"),
+            })
+
         next_run = get_next_run_time()
         next_update = next_run.isoformat() + "Z" if next_run else None
 
@@ -195,6 +212,7 @@ def get_status():
             "coverage": coverage,
             "current_job": job_info,
             "last_job": last_job_info,
+            "recent_jobs": recent_jobs_list,
             "total_entries": total_entries,
             "with_dates": with_dates,
             "tiles_covered": unique_tiles,
@@ -226,6 +244,7 @@ def list_tiles():
     Query params:
         priority: Filter by priority level (high/medium/low)
         has_data: Filter by whether tile has data (true/false)
+        min_lat, max_lat, min_lon, max_lon: Bounding box filter
         page: Page number (default: 1)
         per_page: Items per page (default: 100, max: 500)
 
@@ -236,6 +255,10 @@ def list_tiles():
         # Parse query parameters
         priority = request.args.get('priority')
         has_data_str = request.args.get('has_data')
+        min_lat = request.args.get('min_lat', type=float)
+        max_lat = request.args.get('max_lat', type=float)
+        min_lon = request.args.get('min_lon', type=float)
+        max_lon = request.args.get('max_lon', type=float)
         page = int(request.args.get('page', 1))
         per_page = min(int(request.args.get('per_page', 100)), 500)
 
@@ -249,6 +272,15 @@ def list_tiles():
         # Apply priority filter
         if priority:
             all_tiles = [t for t in all_tiles if t['priority'] == priority]
+
+        # Apply bounding box filter
+        has_bbox = all(v is not None for v in [min_lat, max_lat, min_lon, max_lon])
+        if has_bbox:
+            all_tiles = [
+                t for t in all_tiles
+                if t['bbox'][0] <= max_lon and t['bbox'][2] >= min_lon
+                and t['bbox'][1] <= max_lat and t['bbox'][3] >= min_lat
+            ]
 
         # Get tile data from database
         tile_data = {}

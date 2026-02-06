@@ -38,7 +38,7 @@ const Dashboard = (function() {
             updateCurrentJob(status.current_job);
             updateCoverageStats(status.coverage);
             updateDbStats(status);
-            updateRecentActivity(status.last_job);
+            updateRecentActivity(status.recent_jobs || (status.last_job ? [status.last_job] : []));
 
             // Update refresh rate based on job status
             isJobRunning = status.current_job && status.current_job.status === 'running';
@@ -128,7 +128,7 @@ const Dashboard = (function() {
                 <div class="d-flex justify-between align-center mb-md">
                     <div>
                         <span class="badge badge-primary">Running</span>
-                        <span class="text-small text-muted ml-sm">Job ${job.job_id?.slice(0, 8) || 'Unknown'}</span>
+                        <span class="text-small text-muted ml-sm">Job ${formatJobId(job.job_id)}</span>
                     </div>
                     <span class="text-small text-muted">${formatDuration(elapsed, true)} elapsed</span>
                 </div>
@@ -233,13 +233,13 @@ const Dashboard = (function() {
     }
 
     /**
-     * Update recent activity
+     * Update recent activity with last 10 jobs
      */
-    function updateRecentActivity(lastJob) {
+    function updateRecentActivity(jobs) {
         const container = document.getElementById('recent-activity');
         if (!container) return;
 
-        if (!lastJob) {
+        if (!jobs || jobs.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
                     <p class="empty-state-text text-muted">No recent activity</p>
@@ -248,9 +248,21 @@ const Dashboard = (function() {
             return;
         }
 
-        // For now, just show the last job since we don't have history
-        const duration = lastJob.started_at && lastJob.completed_at ?
-            calculateDuration(lastJob.started_at, lastJob.completed_at) : null;
+        const rows = jobs.map(job => {
+            const duration = job.started_at && job.completed_at ?
+                calculateDuration(job.started_at, job.completed_at) : null;
+
+            return `
+                        <tr>
+                            <td><code>${formatJobId(job.job_id)}</code></td>
+                            <td><span class="badge ${getStatusBadgeClass(job.status)}">${job.status || 'Unknown'}</span></td>
+                            <td>${job.priority_filter || 'All'}</td>
+                            <td>${formatNumber(job.tiles_processed || 0)}</td>
+                            <td>${formatNumber(job.locations_updated || 0)}</td>
+                            <td>${duration ? formatDuration(duration, true) : '--'}</td>
+                            <td>${job.completed_at ? formatTimestamp(job.completed_at, { relative: true }) : '--'}</td>
+                        </tr>`;
+        }).join('');
 
         container.innerHTML = `
             <div class="table" style="overflow-x: auto;">
@@ -267,15 +279,7 @@ const Dashboard = (function() {
                         </tr>
                     </thead>
                     <tbody>
-                        <tr>
-                            <td><code>${lastJob.job_id?.slice(0, 8) || '--'}</code></td>
-                            <td><span class="badge ${getStatusBadgeClass(lastJob.status)}">${lastJob.status || 'Unknown'}</span></td>
-                            <td>${lastJob.priority_filter || 'All'}</td>
-                            <td>${formatNumber(lastJob.tiles_processed || 0)}</td>
-                            <td>${formatNumber(lastJob.locations_updated || 0)}</td>
-                            <td>${duration ? formatDuration(duration, true) : '--'}</td>
-                            <td>${lastJob.completed_at ? formatTimestamp(lastJob.completed_at, { relative: true }) : '--'}</td>
-                        </tr>
+                        ${rows}
                     </tbody>
                 </table>
             </div>
@@ -352,6 +356,15 @@ const Dashboard = (function() {
         const eta = remaining / rate;
 
         return formatDuration(eta, true);
+    }
+
+    /**
+     * Format a job ID for display.
+     * Converts "job_20260206_142530" to "20260206_142530"
+     */
+    function formatJobId(jobId) {
+        if (!jobId) return 'Unknown';
+        return jobId.replace(/^job_/, '');
     }
 
     /**
