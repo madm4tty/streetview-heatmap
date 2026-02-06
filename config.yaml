@@ -21,10 +21,10 @@ scheduler:
   # cron: "0 2 * * *"  # 2 AM daily
 
 update:
-  batch_size: 50              # Tiles to process per job
-  concurrency: 20             # Concurrent Street View API requests
+  batch_size: 200              # Tiles to process per job
+  concurrency: 100             # Concurrent Street View API requests
   min_age_for_recheck_days: 90  # Skip locations checked more recently
-  overpass_delay_seconds: 2   # Delay between Overpass API requests
+  overpass_delay_seconds: 1   # Delay between Overpass API requests
   samples_per_road: 5         # Base samples per road segment
   adaptive_sampling: true     # Adjust samples based on road importance
 

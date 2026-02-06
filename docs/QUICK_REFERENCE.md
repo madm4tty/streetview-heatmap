@@ -65,6 +65,45 @@ scheduler:
   enabled: false
 ```
 
+### Performance Tuning
+
+The Street View Metadata API supports **30k requests/min** with **unlimited daily** quota. Defaults are conservative — increase for faster coverage.
+
+```yaml
+# High-throughput config (for capable VPS with good network)
+update:
+  batch_size: 200         # Default: 50. Max via API: 1000
+  concurrency: 100        # Default: 20. Controls parallel Street View API calls
+  overpass_delay_seconds: 1  # Default: 2. Delay between Overpass queries
+```
+
+**Runtime config changes** (no restart needed):
+
+```bash
+curl -X POST http://localhost:5001/api/config \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"update": {"batch_size": 200, "concurrency": 100}}'
+```
+
+| Parameter | Default | What it controls |
+|-----------|---------|------------------|
+| `batch_size` | 50 | Tiles processed per job run |
+| `concurrency` | 20 | Parallel Street View API requests |
+| `overpass_delay_seconds` | 2 | Delay between Overpass API calls |
+| `samples_per_road` | 5 | Sample points per road segment |
+| `min_age_for_recheck_days` | 90 | Days before low-priority tiles are rechecked |
+
+### Tile Priority Quick Reference
+
+Tiles are prioritised based on city overlap (see README for full details):
+
+- **High**: 15 major metros (London, Birmingham, Manchester, etc.) — scanned first, refreshed at 1yr and 3yr
+- **Medium**: ~120 regional centres (Oxford, Cambridge, York, etc.) — refreshed at 3yr and 1yr
+- **Low**: Rural/remote areas with no city overlap — refreshed after `min_age_for_recheck_days` (default 90)
+
+Non-city tiles still have metadata collected. Tiles with zero roads return early but are retried on the next run.
+
 ---
 
 ## Viewing Logs
@@ -216,20 +255,31 @@ curl https://yourdomain.com/api/health | jq
 ### Trigger Manual Update
 
 ```bash
-# Basic trigger
+# Basic trigger (processes all priorities using smart refresh strategy)
 curl -X POST http://localhost:5001/api/update/trigger \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json"
 
-# With options
+# Scan only high-priority tiles (major cities: London, Birmingham, etc.)
 curl -X POST http://localhost:5001/api/update/trigger \
   -H "X-API-Key: YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"priority": "high", "tile_limit": 10}'
+  -d '{"priority": "high", "tile_limit": 100}'
+
+# Scan medium-priority tiles (regional centres)
+curl -X POST http://localhost:5001/api/update/trigger \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"priority": "medium", "tile_limit": 50}'
 
 # Check update status
 curl http://localhost:5001/api/update/status | jq
+
+# Watch progress in real-time (repeat until complete)
+watch -n 5 'curl -s http://localhost:5001/api/update/status | jq ".percent_complete, .tiles_processed, .tiles_total"'
 ```
+
+**Note:** Only one job can run at a time. `tile_limit` accepts 1-1000.
 
 ### View Configuration
 

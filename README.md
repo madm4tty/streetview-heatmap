@@ -472,18 +472,113 @@ CREATE EXTENSION postgis;
 
 ---
 
-## Background Scheduler
+## Tile Prioritisation & Processing
 
-The web backend includes an automated scheduler that processes tiles based on a smart refresh strategy:
+### How Tile Priority Works
 
-1. **High priority tiles** with locations never checked
-2. **High priority tiles** with locations >3 years old
-3. **Medium priority tiles** with locations >3 years old
-4. **High priority tiles** with locations >1 year old
-5. **Medium priority tiles** with locations >1 year old
-6. **Low priority tiles** (if time permits)
+Every tile in the UK grid (~44,000 tiles at 0.05° x 0.05°) is assigned a priority based on whether it overlaps with a defined city bounding box. The priority is determined by `get_tile_priority()` in `geographic_scope.py`:
 
-The scheduler respects Overpass API rate limits with configurable delays.
+| Priority | Criteria | Cities |
+|----------|----------|--------|
+| **High** | Overlaps a major metropolitan area | London, Birmingham, Manchester, Leeds, Glasgow, Liverpool, Newcastle, Sheffield, Bristol, Edinburgh, Cardiff, Belfast, Nottingham, Leicester, Coventry (15 cities) |
+| **Medium** | Overlaps a regional centre | Bradford, Nottingham, Cambridge, Oxford, Bath, Chester, York, Brighton, etc. (~120 cities) |
+| **Low** | No city overlap, or overlaps a smaller town | Everything else (rural areas, remote regions, smaller towns) |
+
+The algorithm makes two passes over the city list — first checking for high-priority city overlap, then medium. If no city overlaps the tile at all, it defaults to **low**. This means a tile covering both a high and medium city will be classified as high.
+
+### Processing Pipeline Per Tile
+
+When a tile is selected for processing (`process_tile()` in `app/processing.py`), it goes through:
+
+1. **Fetch OSM roads** — Queries the Overpass API for highway geometries within the tile's bounding box
+2. **Sample coordinates** — Takes evenly-spaced points along each road segment. The number of samples is adaptive by default (motorways get more than residential streets)
+3. **Check database cache** — Looks up already-known points to avoid redundant API calls
+4. **Fetch missing metadata** — Async batch queries to the Google Street View Static Metadata API for any uncached points
+5. **Save results** — Persists lat/lon, capture date, tile_id, and priority to the database
+
+### What Happens When a Tile Has No City Overlap
+
+**Metadata is still collected.** Non-city tiles are assigned `priority: "low"` and processed through the same pipeline. The only scenario where no metadata is saved is when a tile contains **zero OSM roads** (very rare in the UK) — in that case the tile returns early with `roads_found: 0` and no database rows are written. However, since it has no metadata entries, it will be re-selected as "never processed" on the next run.
+
+### Smart Refresh Strategy
+
+The scheduler (`_get_tiles_to_process()` in `app/scheduler.py`) selects tiles using a two-phase approach:
+
+**Phase 1 — Never-processed tiles** (highest priority):
+
+Tiles that exist in the geographic scope but have no entries in the metadata table, processed in order: high → medium → low.
+
+**Phase 2 — Stale data refresh:**
+
+Tiles that have been processed before but have old data, using age thresholds:
+
+| Age Threshold | Priority | Effect |
+|---------------|----------|--------|
+| > 3 years | High | Re-scanned first |
+| > 3 years | Medium | Re-scanned second |
+| > 1 year | High | Re-scanned third |
+| > 1 year | Medium | Re-scanned fourth |
+| > `min_age_for_recheck_days` (default 90) | Low | Re-scanned last |
+
+This ensures major cities are always processed first and refreshed most frequently, while rural tiles are still covered over time.
+
+### Triggering a Manual Scan
+
+You can trigger a job at any time via the API, optionally filtering by priority to target specific areas:
+
+```bash
+# Scan only high-priority tiles (major cities)
+curl -X POST http://localhost:5001/api/update/trigger \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"priority": "high", "tile_limit": 100}'
+
+# Scan medium-priority tiles
+curl -X POST http://localhost:5001/api/update/trigger \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"priority": "medium", "tile_limit": 50}'
+
+# Monitor job progress
+curl http://localhost:5001/api/update/status | jq
+```
+
+The `tile_limit` parameter accepts values from 1 to 1000. Only one job can run at a time (a 409 is returned if a job is already running).
+
+### Performance Tuning
+
+The Street View Static Metadata API supports up to **30,000 requests per minute** with **unlimited daily requests**. The default configuration is conservative:
+
+| Parameter | Default | Description | Config Key |
+|-----------|---------|-------------|------------|
+| `batch_size` | 50 | Tiles processed per job run | `update.batch_size` |
+| `concurrency` | 20 | Parallel Street View API requests | `update.concurrency` |
+| `overpass_delay_seconds` | 2 | Delay between Overpass queries (rate limiting) | `update.overpass_delay_seconds` |
+| `samples_per_road` | 5 | Base sample points per road segment | `update.samples_per_road` |
+| `min_age_for_recheck_days` | 90 | Days before low-priority tiles are rechecked | `update.min_age_for_recheck_days` |
+
+These can be changed in `config.yaml` (requires restart) or at runtime via the API:
+
+```bash
+# Increase throughput at runtime (no restart needed)
+curl -X POST http://localhost:5001/api/config \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"update": {"batch_size": 200, "concurrency": 100}}'
+```
+
+### Background Scheduler
+
+The web backend includes APScheduler running update jobs automatically. By default it runs every 24 hours with `max_instances=1` to prevent overlapping runs. It uses the same smart refresh strategy described above.
+
+Scheduling can be configured as interval-based or cron-based:
+
+```yaml
+scheduler:
+  enabled: true
+  interval_hours: 24    # Run every 24 hours
+  # Or use cron: "0 2 * * *"  # Run at 2am daily
+```
 
 ---
 
