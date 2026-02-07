@@ -7,6 +7,7 @@ The backend is determined by the DATABASE_URL environment variable:
 PostgreSQL requires PostGIS extension for spatial operations.
 """
 
+import json
 import os
 import sqlite3
 from datetime import datetime, timedelta
@@ -148,6 +149,29 @@ def _init_postgresql() -> None:
         """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_lat_lon_pg ON metadata(lat, lon)
+        """)
+
+        # Create road_segments table for pre-computed road geometries
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS road_segments (
+                id SERIAL PRIMARY KEY,
+                tile_id VARCHAR(20) NOT NULL,
+                osm_name TEXT,
+                highway_type VARCHAR(30),
+                geometry GEOMETRY(LineString, 4326) NOT NULL,
+                capture_date TEXT,
+                color VARCHAR(7),
+                sample_count INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_road_segments_tile
+            ON road_segments(tile_id)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_road_segments_geom
+            ON road_segments USING GIST(geometry)
         """)
 
     _conn.commit()
@@ -557,3 +581,107 @@ def get_backend() -> str:
 def is_postgresql() -> bool:
     """Return True if using PostgreSQL backend."""
     return _backend == "postgresql"
+
+
+# ============================================================================
+# Road segments (PostgreSQL/PostGIS only)
+# ============================================================================
+
+def save_road_segments_batch(tile_id: str, segments: List[Dict]) -> int:
+    """Save pre-computed road segments for a tile.
+
+    Replaces any existing segments for the tile (delete + insert).
+
+    Args:
+        tile_id: Tile identifier
+        segments: List of dicts with keys:
+            osm_name, highway_type, coords (list of (lat, lon) tuples),
+            capture_date, color, sample_count
+
+    Returns:
+        Number of segments saved.
+    """
+    if _conn is None:
+        raise RuntimeError("Database not initialised")
+    if _backend != "postgresql":
+        return 0
+    if not segments:
+        return 0
+
+    from psycopg2.extras import execute_values
+
+    with _conn.cursor() as cur:
+        # Remove old road data for this tile
+        cur.execute("DELETE FROM road_segments WHERE tile_id = %s", (tile_id,))
+
+        # Build rows: (tile_id, osm_name, highway_type, WKT, capture_date, color, sample_count)
+        rows = []
+        for seg in segments:
+            coords = seg["coords"]  # list of (lat, lon) tuples
+            if len(coords) < 2:
+                continue
+            # WKT LineString uses "lon lat" order
+            wkt_coords = ", ".join(f"{lon} {lat}" for lat, lon in coords)
+            wkt = f"SRID=4326;LINESTRING({wkt_coords})"
+            rows.append((
+                tile_id,
+                seg.get("osm_name"),
+                seg.get("highway_type"),
+                wkt,
+                seg.get("capture_date"),
+                seg.get("color"),
+                seg.get("sample_count", 0),
+            ))
+
+        if rows:
+            execute_values(
+                cur,
+                """
+                INSERT INTO road_segments
+                    (tile_id, osm_name, highway_type, geometry, capture_date, color, sample_count, updated_at)
+                VALUES %s
+                """,
+                rows,
+                template="(%s, %s, %s, ST_GeomFromEWKT(%s), %s, %s, %s, CURRENT_TIMESTAMP)",
+            )
+
+    _conn.commit()
+    return len(rows)
+
+
+def get_road_segments_for_tile(tile_id: str) -> List[Dict]:
+    """Get pre-computed road segments for a tile.
+
+    Args:
+        tile_id: Tile identifier
+
+    Returns:
+        List of dicts with keys: name, highway_type, capture_date, color,
+        coordinates (list of [lon, lat] pairs in GeoJSON order).
+        Returns empty list if no data or not using PostgreSQL.
+    """
+    if _conn is None:
+        raise RuntimeError("Database not initialised")
+    if _backend != "postgresql":
+        return []
+
+    with _conn.cursor() as cur:
+        cur.execute("""
+            SELECT osm_name, highway_type, capture_date, color,
+                   ST_AsGeoJSON(geometry) as geojson
+            FROM road_segments
+            WHERE tile_id = %s
+        """, (tile_id,))
+
+        results = []
+        for row in cur.fetchall():
+            geom = json.loads(row[4])
+            results.append({
+                "name": row[0],
+                "highway_type": row[1],
+                "capture_date": row[2],
+                "color": row[3],
+                "coordinates": geom["coordinates"],
+            })
+
+        return results

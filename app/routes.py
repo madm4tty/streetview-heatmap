@@ -8,7 +8,6 @@ Provides endpoints for:
 """
 
 import logging
-import time
 from datetime import datetime
 from functools import wraps
 from typing import Any, Dict, Optional
@@ -36,19 +35,12 @@ from app.scheduler import (
     trigger_update_job,
     reschedule_job,
 )
-from app.processing import get_tile_geojson, get_tile_road_geojson
+from app.processing import get_tile_geojson, get_tile_road_geojson_from_db
 
 logger = logging.getLogger(__name__)
 
 # Create Blueprint
 api_bp = Blueprint('api', __name__)
-
-# In-memory cache for road GeoJSON tiles.
-# Each tile's road geometry rarely changes, so we cache it to avoid
-# hammering the Overpass API on every map pan/zoom.
-# Key: tile_id, Value: {"geojson": {...}, "timestamp": float}
-_road_geojson_cache: Dict[str, Dict] = {}
-ROAD_CACHE_TTL = 3600  # Cache road GeoJSON for 1 hour
 
 
 def require_api_key(f):
@@ -381,33 +373,12 @@ def get_tile_data(tile_id: str):
         format_type = request.args.get('format', 'points')
 
         if format_type == 'roads':
-            # Check in-memory cache first
-            cached = _road_geojson_cache.get(tile_id)
-            if cached and (time.time() - cached["timestamp"]) < ROAD_CACHE_TTL:
-                return jsonify(cached["geojson"])
-
-            # Get road GeoJSON (requires Google API key for Street View metadata)
-            api_key = current_app.config.get('google', {}).get('api_key')
-            if not api_key:
-                return jsonify({
-                    "error": "Configuration Error",
-                    "message": "Google API key not configured"
-                }), 500
-
-            update_config = current_app.config.get('update', {})
-            geojson = get_tile_road_geojson(
-                tile_id,
-                api_key,
-                samples_per_road=update_config.get('samples_per_road', 5),
-                concurrency=update_config.get('concurrency', 20),
-                adaptive_sampling=update_config.get('adaptive_sampling', True)
-            )
-
-            # Cache the result
-            _road_geojson_cache[tile_id] = {
-                "geojson": geojson,
-                "timestamp": time.time()
-            }
+            # Serve pre-computed road LineStrings from the database.
+            # Falls back to points if no road data exists yet (tile
+            # hasn't been re-processed since road storage was added).
+            geojson = get_tile_road_geojson_from_db(tile_id)
+            if geojson is None:
+                geojson = get_tile_geojson(tile_id)
         else:
             # Get point GeoJSON from cached data
             geojson = get_tile_geojson(tile_id)

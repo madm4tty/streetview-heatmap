@@ -363,8 +363,9 @@ def process_tile(
             "duration_seconds": time.time() - start_time
         }
 
-    # Sample points from roads
+    # Sample points from roads, tracking which samples belong to which road
     all_sample_points: List[Tuple[float, float]] = []
+    road_samples: List[Tuple[List[Tuple[float, float]], Optional[str], Optional[str], List[Tuple[float, float]]]] = []
 
     for coords, name, highway_type in roads:
         if adaptive_sampling:
@@ -372,6 +373,7 @@ def process_tile(
         else:
             n_samples = samples_per_road
         sampled = sample_coords(coords, n_samples)
+        road_samples.append((coords, name, highway_type, sampled))
         all_sample_points.extend(sampled)
 
     unique_points = list(set(all_sample_points))
@@ -396,18 +398,72 @@ def process_tile(
     # Count locations with dates
     locations_updated = sum(1 for v in cached.values() if v)
 
+    # Save road geometries with dates if using PostgreSQL
+    roads_saved = 0
+    if database.is_postgresql():
+        roads_saved = _save_road_segments(tile_id, road_samples, cached)
+
     duration = time.time() - start_time
-    logger.info("Tile %s complete: %d roads, %d locations, %d API calls, %.1fs",
-                tile_id, len(roads), len(unique_points), api_calls, duration)
+    logger.info("Tile %s complete: %d roads (%d saved), %d locations, %d API calls, %.1fs",
+                tile_id, len(roads), roads_saved, len(unique_points), api_calls, duration)
 
     return {
         "tile_id": tile_id,
         "roads_found": len(roads),
+        "roads_saved": roads_saved,
         "locations_checked": len(unique_points),
         "locations_updated": locations_updated,
         "api_calls": api_calls,
         "duration_seconds": duration
     }
+
+
+def _save_road_segments(
+    tile_id: str,
+    road_samples: List[Tuple[List[Tuple[float, float]], Optional[str], Optional[str], List[Tuple[float, float]]]],
+    date_lookup: Dict[Tuple[float, float], Optional[str]],
+) -> int:
+    """Save road geometries with computed dates to the database.
+
+    For each road, finds the latest Street View date among its sampled points
+    and stores the full LineString geometry with that date.
+
+    Args:
+        tile_id: Tile identifier
+        road_samples: List of (coords, name, highway_type, sampled_points)
+        date_lookup: Dict mapping (lat, lon) -> date string
+
+    Returns:
+        Number of road segments saved.
+    """
+    segments = []
+    for coords, name, highway_type, sampled in road_samples:
+        # Find the latest date among this road's sampled points
+        latest: Optional[datetime] = None
+        for lat, lon in sampled:
+            rounded = (round(lat, database.COORD_PRECISION),
+                       round(lon, database.COORD_PRECISION))
+            date_str = date_lookup.get(rounded)
+            if date_str:
+                try:
+                    d = parse_date(date_str)
+                    if not latest or d > latest:
+                        latest = d
+                except ValueError:
+                    continue
+
+        if latest:
+            date_str = latest.strftime("%Y-%m-%d")
+            segments.append({
+                "osm_name": name,
+                "highway_type": highway_type,
+                "coords": coords,
+                "capture_date": date_str,
+                "color": age_to_color(date_str),
+                "sample_count": len(sampled),
+            })
+
+    return database.save_road_segments_batch(tile_id, segments)
 
 
 def fetch_and_process_bbox(
@@ -632,5 +688,47 @@ def get_tile_road_geojson(
             "bbox": bbox,
             "road_count": len(features),
             "stats": result["stats"]
+        }
+    }
+
+
+def get_tile_road_geojson_from_db(tile_id: str) -> Optional[Dict[str, Any]]:
+    """Get pre-computed road LineString GeoJSON for a tile from the database.
+
+    Returns None if no road data exists for the tile (e.g. tile hasn't been
+    processed yet with road segment storage enabled).
+
+    Args:
+        tile_id: Tile identifier
+
+    Returns:
+        GeoJSON FeatureCollection with LineString features, or None.
+    """
+    segments = database.get_road_segments_for_tile(tile_id)
+    if not segments:
+        return None
+
+    features = []
+    for seg in segments:
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "LineString",
+                "coordinates": seg["coordinates"],
+            },
+            "properties": {
+                "name": seg["name"],
+                "highway_type": seg["highway_type"],
+                "date": seg["capture_date"],
+                "color": seg["color"],
+            }
+        })
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "properties": {
+            "tile_id": tile_id,
+            "road_count": len(features),
         }
     }

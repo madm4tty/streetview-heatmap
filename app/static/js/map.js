@@ -495,24 +495,43 @@ const HeatmapMap = (function() {
         const date = props.date || props.capture_date;
         const formattedDate = date ? formatTimestamp(date, { includeTime: false }) : 'Unknown';
         const category = getAgeCategory(date);
+        const geomType = feature.geometry?.type;
+        const name = props.name || 'Unknown road';
 
-        // Extract coordinates for the Google Maps Street View link.
-        // GeoJSON coordinates are [lon, lat]; Google Maps expects lat,lon.
-        const coords = feature.geometry?.coordinates;
-        const lat = coords ? coords[1] : null;
-        const lon = coords ? coords[0] : null;
+        // Extract a representative coordinate for the Street View link.
+        // For LineString use the midpoint; for Point use the coordinate directly.
+        let lat, lon;
+        if (geomType === 'LineString') {
+            const coords = feature.geometry.coordinates;
+            const mid = coords[Math.floor(coords.length / 2)];
+            lon = mid[0];
+            lat = mid[1];
+        } else {
+            const coords = feature.geometry?.coordinates;
+            lat = coords ? coords[1] : null;
+            lon = coords ? coords[0] : null;
+        }
 
         // Build Google Maps Street View URL.
-        // The @lat,lon,... part positions the camera; layer=c activates SV.
         const streetViewUrl = (lat && lon)
             ? `https://www.google.com/maps/@${lat},${lon},3a,75y,0h,90t/data=!3m6!1e1!3m4!1s!2e0!7i16384!8i8192`
             : null;
 
-        // Popup on click (no tooltip — tooltips on thousands of canvas
-        // markers fire constantly on mousemove and hurt performance)
+        // For LineString (road) features, add a sticky tooltip on hover
+        // showing road name and date. This is performant because there are
+        // far fewer road segments than individual points.
+        if (geomType === 'LineString') {
+            layer.bindTooltip(
+                `<div><b>${name}</b><br>${formattedDate}</div>`,
+                { sticky: true, direction: 'top', opacity: 0.9 }
+            );
+        }
+
+        const titleText = geomType === 'LineString' ? name : 'Street View Coverage';
+
         layer.bindPopup(`
             <div class="popup-content">
-                <h4 class="popup-title">Street View Coverage</h4>
+                <h4 class="popup-title">${titleText}</h4>
                 <ul class="popup-info">
                     <li>
                         <span class="popup-label">Capture Date</span>

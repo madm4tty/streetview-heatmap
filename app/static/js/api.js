@@ -117,7 +117,7 @@ class HeatmapAPI {
      * @returns {Promise<Object>} GeoJSON FeatureCollection
      */
     async getTileData(tileId) {
-        return this._fetch(`${this.baseUrl}/tiles/${encodeURIComponent(tileId)}/data`);
+        return this._fetch(`${this.baseUrl}/tiles/${encodeURIComponent(tileId)}/data?format=roads`);
     }
 
     // ===== Jobs & Updates =====
