@@ -220,6 +220,7 @@ async def fetch_streetview_metadata_batch(
     concurrency: int = 20,
     batch_save_size: int = 100,
     on_progress: Optional[callable] = None,
+    priority: Optional[str] = None,
 ) -> Dict[Tuple[float, float], Optional[str]]:
     """Fetch Street View metadata for multiple points asynchronously.
 
@@ -229,6 +230,7 @@ async def fetch_streetview_metadata_batch(
         concurrency: Maximum concurrent requests
         batch_save_size: Save to database every N entries
         on_progress: Optional callback(completed, total) for progress updates
+        priority: Tile priority level (high/medium/low) for DB storage
 
     Returns:
         Dict mapping (lat, lon) -> date string or None
@@ -288,7 +290,9 @@ async def fetch_streetview_metadata_batch(
                         entries = batch_to_save.copy()
                         batch_to_save.clear()
                         loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(None, database.save_metadata_batch, entries)
+                        await loop.run_in_executor(
+                            None, database.save_metadata_batch, entries, priority
+                        )
 
             if on_progress:
                 on_progress(completed_count[0], len(unique_points))
@@ -299,7 +303,7 @@ async def fetch_streetview_metadata_batch(
 
     # Save remaining entries
     if batch_to_save:
-        database.save_metadata_batch(batch_to_save)
+        database.save_metadata_batch(batch_to_save, priority=priority)
 
     elapsed = time.time() - start_time
     results_with_dates = sum(1 for v in results.values() if v)
@@ -390,7 +394,7 @@ def process_tile(
     api_calls = 0
     if missing_points:
         fetched = asyncio.run(fetch_streetview_metadata_batch(
-            missing_points, api_key, concurrency
+            missing_points, api_key, concurrency, priority=priority
         ))
         api_calls = len(missing_points)
         cached.update(fetched)

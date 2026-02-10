@@ -274,6 +274,7 @@ def save_metadata(lat: float, lon: float, date: str, commit: bool = True,
                 VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT (lat, lon) DO UPDATE SET
                     date = EXCLUDED.date,
+                    priority = COALESCE(EXCLUDED.priority, metadata.priority),
                     last_checked = CURRENT_TIMESTAMP,
                     fetched_at = CURRENT_TIMESTAMP
             """, (lat, lon, date, lon, lat, tile_id, priority))
@@ -322,6 +323,7 @@ def save_metadata_batch(entries: List[Tuple[float, float, str]],
                 VALUES %s
                 ON CONFLICT (lat, lon) DO UPDATE SET
                     date = EXCLUDED.date,
+                    priority = COALESCE(EXCLUDED.priority, metadata.priority),
                     last_checked = CURRENT_TIMESTAMP,
                     fetched_at = CURRENT_TIMESTAMP
                 """,

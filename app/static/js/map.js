@@ -20,6 +20,9 @@ const HeatmapMap = (function() {
         // Minimum zoom level to show road data
         minZoomForRoads: 10,
 
+        // Minimum zoom level to show grid overlay
+        minZoomForGrid: 12,
+
         // Debounce delay for tile loading
         loadDelay: 300,
 
@@ -569,6 +572,14 @@ const HeatmapMap = (function() {
      * Load visible grid tiles
      */
     async function loadVisibleGrid() {
+        const zoom = map.getZoom();
+
+        // Don't load grid at low zoom levels — too many tiles cause lag
+        if (zoom < CONFIG.minZoomForGrid) {
+            gridLayer.clearLayers();
+            return;
+        }
+
         const bounds = map.getBounds();
 
         try {

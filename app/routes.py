@@ -121,18 +121,46 @@ def get_status():
         coverage_stats = database.get_coverage_stats()
 
         # Calculate coverage by priority
+        # Use tile-level coverage from the database, counting distinct
+        # tile_ids that have data.  Rows with NULL priority (legacy data)
+        # are attributed to the correct priority via geographic lookup.
         coverage = {}
         all_tiles = generate_uk_tiles()
         tiles_by_priority = {}
+        tile_priority_lookup = {}
         for t in all_tiles:
             tiles_by_priority.setdefault(t['priority'], []).append(t)
+            tile_priority_lookup[t['tile_id']] = t['priority']
+
+        # Count tiles with data per priority using the database
+        tiles_with_data_by_priority = {'high': set(), 'medium': set(), 'low': set()}
+        if database.is_postgresql():
+            try:
+                with database._conn.cursor() as cur:
+                    cur.execute("SELECT DISTINCT tile_id FROM metadata WHERE tile_id IS NOT NULL")
+                    for row in cur.fetchall():
+                        tid = row[0]
+                        p = tile_priority_lookup.get(tid)
+                        if p and p in tiles_with_data_by_priority:
+                            tiles_with_data_by_priority[p].add(tid)
+            except Exception as e:
+                logger.warning("Failed to query tile coverage: %s", e)
+
+        by_priority = coverage_stats.get('by_priority', {})
 
         for priority in ['high', 'medium', 'low']:
-            priority_data = coverage_stats.get('by_priority', {}).get(priority, {})
+            priority_data = by_priority.get(priority, {})
             total_entries = priority_data.get('total_entries', 0)
             with_date = priority_data.get('entries_with_date', 0)
-            tiles = priority_data.get('tiles_covered', 0)
 
+            # Also include entries with unset priority that belong to
+            # tiles of this priority level (legacy data)
+            unset_data = by_priority.get('unset', {})
+            if unset_data:
+                # These are already counted via tile_id lookup above
+                pass
+
+            tiles = len(tiles_with_data_by_priority.get(priority, set()))
             total_tiles = len(tiles_by_priority.get(priority, []))
 
             coverage[priority] = {
@@ -205,10 +233,19 @@ def get_status():
         total_entries = db_stats.get("total_entries", 0)
         with_dates = db_stats.get("entries_with_date", 0)
 
+        # Include scheduler config so the dashboard can display it
+        scheduler_config = current_app.config.get('scheduler', {})
+        scheduler_info = {
+            "enabled": scheduler_config.get('enabled', True),
+            "interval_hours": scheduler_config.get('interval_hours', 24),
+            "next_run": next_update
+        }
+
         response = {
             "status": "running",
             "last_update": last_update,
             "next_update": next_update,
+            "scheduler": scheduler_info,
             "coverage": coverage,
             "current_job": job_info,
             "last_job": last_job_info,
