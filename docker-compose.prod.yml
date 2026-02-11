@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    restart: always
+    ports:
+      - "5001:5001"
+    environment:
+      - DATABASE_URL=postgresql://streetview:${DB_PASSWORD}@postgres:5432/streetview
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
+      - API_KEY=${API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml:ro
+
+  postgres:
+    image: postgis/postgis:16-3.4
+    restart: always
+    environment:
+      POSTGRES_USER: streetview
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: streetview
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streetview -d streetview"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Memory tuning for 1GB e2-micro VM.
+    # Remove or increase these values when using e2-small (2GB) or larger.
+    command: >
+      postgres
+        -c shared_buffers=128MB
+        -c max_connections=20
+        -c work_mem=4MB
+
+volumes:
+  postgres_data:
