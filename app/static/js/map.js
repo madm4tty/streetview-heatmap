@@ -122,7 +122,13 @@ const HeatmapMap = (function() {
         }).addTo(map);
 
         // Setup event handlers
-        map.on('moveend', debounce(loadVisibleTiles, CONFIG.loadDelay));
+        map.on('moveend', debounce(() => {
+            loadVisibleTiles();
+            const gridCheckbox = document.getElementById('layer-grid');
+            if (gridCheckbox && gridCheckbox.checked) {
+                loadVisibleGrid();
+            }
+        }, CONFIG.loadDelay));
         map.on('zoomend', handleZoomChange);
         map.on('mousemove', updateCoordinates);
 
@@ -182,6 +188,7 @@ const HeatmapMap = (function() {
                 } else {
                     gridLayer.remove();
                 }
+                updateGridZoomHint();
             });
         }
 
@@ -658,6 +665,20 @@ const HeatmapMap = (function() {
         if (gridCheckbox && gridCheckbox.checked) {
             loadVisibleGrid();
         }
+
+        updateGridZoomHint();
+    }
+
+    /**
+     * Show or hide the "zoom to level 12+" hint for the coverage grid
+     */
+    function updateGridZoomHint() {
+        const hint = document.getElementById('grid-zoom-hint');
+        const gridCheckbox = document.getElementById('layer-grid');
+        if (!hint || !gridCheckbox) return;
+
+        const belowThreshold = map.getZoom() < CONFIG.minZoomForGrid;
+        hint.classList.toggle('visible', gridCheckbox.checked && belowThreshold);
     }
 
     function updateZoomDisplay(zoom) {

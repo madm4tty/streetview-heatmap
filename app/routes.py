@@ -208,7 +208,7 @@ def get_status():
             }
 
         # Get recent jobs for activity feed
-        recent_jobs_raw = get_recent_jobs(limit=10)
+        recent_jobs_raw = get_recent_jobs(limit=5)
         recent_jobs_list = []
         for rj in recent_jobs_raw:
             recent_jobs_list.append({
@@ -224,7 +224,7 @@ def get_status():
             })
 
         next_run = get_next_run_time()
-        next_update = next_run.isoformat() + "Z" if next_run else None
+        next_update = next_run.strftime('%Y-%m-%dT%H:%M:%SZ') if next_run else None
 
         # Get database stats
         db_stats = database.get_cache_stats()

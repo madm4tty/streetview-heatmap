@@ -89,6 +89,18 @@
     flex: 1;
 }
 
+.layer-zoom-hint {
+    display: none;
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    padding: 2px var(--spacing-sm) var(--spacing-xs);
+    font-style: italic;
+}
+
+.layer-zoom-hint.visible {
+    display: block;
+}
+
 /* Collapsible layer control */
 .layer-control.collapsed .layer-control-body {
     display: none;
