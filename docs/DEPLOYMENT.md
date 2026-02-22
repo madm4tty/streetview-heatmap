@@ -168,7 +168,7 @@ You should see the PostGIS version output.
 sudo su - heatmap
 
 # Clone the repository
-git clone https://github.com/madm4tty/streetview-heatmap.git
+git clone https://github.com/YOUR_USERNAME/streetview-heatmap.git
 cd streetview-heatmap
 ```
 

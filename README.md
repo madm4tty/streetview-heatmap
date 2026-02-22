@@ -22,7 +22,7 @@ This project visualizes the age of Google Street View imagery across UK road net
 
 ```bash
 # Clone the repository
-git clone git@github.com:madm4tty/streetview-heatmap.git
+git clone git@github.com:YOUR_USERNAME/streetview-heatmap.git
 cd streetview-heatmap
 
 # Install dependencies

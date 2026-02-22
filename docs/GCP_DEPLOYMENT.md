@@ -78,14 +78,14 @@ docker run hello-world
 ## 5. Clone the repo
 
 ```bash
-git clone git@github.com:madm4tty/streetview-heatmap.git
+git clone git@github.com:YOUR_USERNAME/streetview-heatmap.git
 cd streetview-heatmap
 ```
 
 If using HTTPS instead:
 
 ```bash
-git clone https://github.com/madm4tty/streetview-heatmap.git
+git clone https://github.com/YOUR_USERNAME/streetview-heatmap.git
 cd streetview-heatmap
 ```
 
