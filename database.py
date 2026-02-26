@@ -687,3 +687,41 @@ def get_road_segments_for_tile(tile_id: str) -> List[Dict]:
             })
 
         return results
+
+
+def get_tile_summaries(tile_ids: List[str]) -> List[Dict]:
+    """Get aggregated coverage summaries for a list of tiles.
+
+    Queries the road_segments table for segment count and latest capture
+    date per tile.  Used by the low-zoom summary layer.
+
+    Args:
+        tile_ids: List of tile identifiers to summarise.
+
+    Returns:
+        List of dicts with keys: tile_id, segment_count, latest_date.
+        Returns empty list if not using PostgreSQL or no data found.
+    """
+    if _conn is None:
+        raise RuntimeError("Database not initialised")
+    if _backend != "postgresql" or not tile_ids:
+        return []
+
+    with _conn.cursor() as cur:
+        cur.execute("""
+            SELECT tile_id,
+                   COUNT(*) AS segment_count,
+                   MAX(capture_date) AS latest_date
+            FROM road_segments
+            WHERE tile_id = ANY(%s)
+            GROUP BY tile_id
+        """, (tile_ids,))
+
+        return [
+            {
+                "tile_id": row[0],
+                "segment_count": row[1],
+                "latest_date": row[2],
+            }
+            for row in cur.fetchall()
+        ]

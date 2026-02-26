@@ -120,6 +120,22 @@ class HeatmapAPI {
         return this._fetch(`${this.baseUrl}/tiles/${encodeURIComponent(tileId)}/data?format=roads`);
     }
 
+    /**
+     * Get lightweight tile summaries for a bounding box (low-zoom overview)
+     * @param {Object} bounds - Bounding box {north, south, east, west}
+     * @returns {Promise<Object>} Tile summaries with segment counts and latest dates
+     */
+    async getTileSummary(bounds) {
+        const params = {
+            north: bounds.north,
+            south: bounds.south,
+            east: bounds.east,
+            west: bounds.west
+        };
+        const queryString = this._buildQueryString(params);
+        return this._fetch(`${this.baseUrl}/tiles/summary${queryString}`);
+    }
+
     // ===== Jobs & Updates =====
 
     /**

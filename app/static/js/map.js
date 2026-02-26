@@ -48,9 +48,11 @@ const HeatmapMap = (function() {
     let map = null;
     let roadLayer = null;
     let gridLayer = null;
+    let summaryLayer = null;
     let loadedTiles = new Set();
     let loadingTiles = new Set();
     let failedTiles = new Set();
+    let loadSessionId = 0;
     let cities = [];
 
     // UI Elements
@@ -124,6 +126,7 @@ const HeatmapMap = (function() {
         // Setup event handlers
         map.on('moveend', debounce(() => {
             loadVisibleTiles();
+            loadSummaryLayer();
             const gridCheckbox = document.getElementById('layer-grid');
             if (gridCheckbox && gridCheckbox.checked) {
                 loadVisibleGrid();
@@ -143,8 +146,11 @@ const HeatmapMap = (function() {
      * Setup map layers
      */
     function setupLayers() {
-        // Road coverage layer (GeoJSON)
+        // Road coverage layer (GeoJSON) — visible at zoom >= 10
         roadLayer = L.layerGroup().addTo(map);
+
+        // Low-zoom coverage summary layer — visible at zoom 7–9
+        summaryLayer = L.layerGroup().addTo(map);
 
         // Coverage grid layer
         gridLayer = L.layerGroup();
@@ -338,7 +344,22 @@ const HeatmapMap = (function() {
     // ===== Tile Loading =====
 
     /**
-     * Load tiles visible in the current viewport
+     * Get the center coordinate of a tile from its ID.
+     * Parses the "tile_{lonIdx}_{latIdx}" format and returns [lat, lon].
+     */
+    function tileCenterFromId(tileId) {
+        const parts = tileId.split('_');
+        const lonIdx = parseInt(parts[1], 10);
+        const latIdx = parseInt(parts[2], 10);
+        const lon = CONFIG.tileOrigin.minLon + (lonIdx + 0.5) * CONFIG.tileSize;
+        const lat = CONFIG.tileOrigin.minLat + (latIdx + 0.5) * CONFIG.tileSize;
+        return [lat, lon];
+    }
+
+    /**
+     * Load tiles visible in the current viewport.
+     * Starts a new loading session that loads batches center-out
+     * until all visible tiles are loaded or the user pans/zooms.
      */
     async function loadVisibleTiles() {
         const zoom = map.getZoom();
@@ -348,37 +369,65 @@ const HeatmapMap = (function() {
             return;
         }
 
+        // Start a new session — any in-progress continuation stops
+        const sessionId = ++loadSessionId;
+        await loadNextBatch(sessionId);
+    }
+
+    /**
+     * Load the next batch of visible tiles, sorted center-out.
+     * Continues loading until all visible tiles are loaded or
+     * a new session starts (user panned/zoomed).
+     */
+    async function loadNextBatch(sessionId) {
+        // Abort if a newer session started
+        if (sessionId !== loadSessionId) return;
+
         const bounds = map.getBounds();
         const visibleTileIds = getVisibleTileIds(bounds);
 
         // Filter out already loaded and currently loading tiles
-        // Allow failed tiles to retry
         const tilesToLoad = visibleTileIds.filter(id =>
             !loadedTiles.has(id) && !loadingTiles.has(id)
         );
 
         if (tilesToLoad.length === 0) {
+            hideTileLoading();
             return;
         }
 
-        // Limit tiles to load
-        const limitedTiles = tilesToLoad.slice(0, CONFIG.maxTilesPerLoad);
+        // Sort tiles by distance from viewport center (center-out)
+        const center = map.getCenter();
+        tilesToLoad.sort((a, b) => {
+            const [aLat, aLon] = tileCenterFromId(a);
+            const [bLat, bLon] = tileCenterFromId(b);
+            return ((aLat - center.lat) ** 2 + (aLon - center.lng) ** 2)
+                 - ((bLat - center.lat) ** 2 + (bLon - center.lng) ** 2);
+        });
 
-        // Show loading indicator
+        const batch = tilesToLoad.slice(0, CONFIG.maxTilesPerLoad);
+
         showTileLoading();
+        batch.forEach(id => loadingTiles.add(id));
 
-        // Mark as loading
-        limitedTiles.forEach(id => loadingTiles.add(id));
-
-        // Load tiles in parallel — the points format reads from the
-        // database cache so there is no external API rate limit concern.
         try {
-            await Promise.all(limitedTiles.map(tileId => loadTileData(tileId)));
+            await Promise.all(batch.map(tileId => loadTileData(tileId)));
         } catch (error) {
             console.error('Error loading tiles:', error);
         }
 
-        // Hide loading indicator
+        // Continue loading if still the active session
+        if (sessionId === loadSessionId) {
+            const remaining = visibleTileIds.filter(id =>
+                !loadedTiles.has(id) && !loadingTiles.has(id)
+            );
+            if (remaining.length > 0) {
+                // Brief pause to let browser render and stay responsive
+                setTimeout(() => loadNextBatch(sessionId), 100);
+                return;
+            }
+        }
+
         hideTileLoading();
     }
 
@@ -573,6 +622,57 @@ const HeatmapMap = (function() {
         `);
     }
 
+    // ===== Coverage Summary (Low Zoom) =====
+
+    /**
+     * Load the low-zoom coverage summary layer.
+     * Shows colored rectangles per tile at zoom 7–9, colored by
+     * the age of the most recent Street View capture in each tile.
+     */
+    async function loadSummaryLayer() {
+        const zoom = map.getZoom();
+
+        // Only show summary at zoom 7–9 (below road detail, above country overview)
+        if (zoom < 7 || zoom >= CONFIG.minZoomForRoads) {
+            summaryLayer.clearLayers();
+            return;
+        }
+
+        const bounds = map.getBounds();
+
+        try {
+            const response = await api.getTileSummary({
+                north: bounds.getNorth(),
+                south: bounds.getSouth(),
+                east: bounds.getEast(),
+                west: bounds.getWest()
+            });
+
+            summaryLayer.clearLayers();
+
+            for (const tile of (response.tiles || [])) {
+                const lat = CONFIG.tileOrigin.minLat + tile.lat_idx * CONFIG.tileSize;
+                const lon = CONFIG.tileOrigin.minLon + tile.lon_idx * CONFIG.tileSize;
+                const color = ageToColor(tile.latest_date);
+
+                const rect = L.rectangle(
+                    [[lat, lon], [lat + CONFIG.tileSize, lon + CONFIG.tileSize]],
+                    {
+                        color: color,
+                        weight: 0,
+                        fillColor: color,
+                        fillOpacity: 0.4,
+                        interactive: false
+                    }
+                );
+
+                rect.addTo(summaryLayer);
+            }
+        } catch (error) {
+            console.error('Failed to load summary layer:', error);
+        }
+    }
+
     // ===== Coverage Grid =====
 
     /**
@@ -659,6 +759,13 @@ const HeatmapMap = (function() {
 
         // Update zoom level display
         updateZoomDisplay(zoom);
+
+        // Manage summary layer visibility based on zoom
+        if (zoom >= 7 && zoom < CONFIG.minZoomForRoads) {
+            loadSummaryLayer();
+        } else {
+            summaryLayer.clearLayers();
+        }
 
         // Reload grid if visible
         const gridCheckbox = document.getElementById('layer-grid');

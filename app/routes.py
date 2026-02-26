@@ -20,6 +20,8 @@ from geographic_scope import (
     get_tile_bbox,
     get_tile_priority,
     UK_MAJOR_CITIES,
+    UK_BOUNDS,
+    TILE_SIZE,
 )
 from app.models import (
     TriggerUpdateRequest,
@@ -428,6 +430,63 @@ def get_tile_data(tile_id: str):
             "error": "Internal Error",
             "message": str(e)
         }), 500
+
+
+@api_bp.route('/tiles/summary', methods=['GET'])
+def get_tiles_summary():
+    """Get lightweight tile summaries for a bounding box.
+
+    Returns segment count and latest capture date per tile,
+    used by the low-zoom coverage summary layer.
+
+    Query params:
+        north, south, east, west: Bounding box coordinates (required)
+
+    Returns:
+        {tiles: [{tile_id, lon_idx, lat_idx, segment_count, latest_date}]}
+    """
+    north = request.args.get('north', type=float)
+    south = request.args.get('south', type=float)
+    east = request.args.get('east', type=float)
+    west = request.args.get('west', type=float)
+
+    if any(v is None for v in [north, south, east, west]):
+        return jsonify({"error": "Missing bounds parameters"}), 400
+
+    # Clamp to UK bounds
+    min_lon, min_lat, max_lon, max_lat = UK_BOUNDS
+    clamped_west = max(west, min_lon)
+    clamped_east = min(east, max_lon)
+    clamped_south = max(south, min_lat)
+    clamped_north = min(north, max_lat)
+
+    # Compute visible tile IDs from bounds
+    start_lon_idx = int((clamped_west - min_lon) / TILE_SIZE)
+    end_lon_idx = int((clamped_east - min_lon) / TILE_SIZE) + 1
+    start_lat_idx = int((clamped_south - min_lat) / TILE_SIZE)
+    end_lat_idx = int((clamped_north - min_lat) / TILE_SIZE) + 1
+
+    tile_ids = []
+    for lon_idx in range(max(0, start_lon_idx), end_lon_idx):
+        for lat_idx in range(max(0, start_lat_idx), end_lat_idx):
+            tile_ids.append(f"tile_{lon_idx}_{lat_idx}")
+
+    if not tile_ids:
+        return jsonify({"tiles": []})
+
+    try:
+        summaries = database.get_tile_summaries(tile_ids)
+    except Exception as e:
+        logger.error("Failed to get tile summaries: %s", e)
+        return jsonify({"error": "Internal Error", "message": str(e)}), 500
+
+    # Add lon_idx/lat_idx for frontend coordinate reconstruction
+    for s in summaries:
+        parts = s["tile_id"].split("_")
+        s["lon_idx"] = int(parts[1])
+        s["lat_idx"] = int(parts[2])
+
+    return jsonify({"tiles": summaries})
 
 
 # ============================================================================
