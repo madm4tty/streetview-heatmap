@@ -17,8 +17,19 @@ const HeatmapMap = (function() {
         // Tile size in degrees (matches backend)
         tileSize: 0.05,
 
-        // Minimum zoom level to show road data
-        minZoomForRoads: 10,
+        // Minimum zoom level to show detailed road LineStrings
+        minZoomForRoads: 15,
+
+        // Zoom-to-resolution mapping for progressive summary rectangles.
+        // At lower zooms we use larger cells; as the user zooms in the
+        // rectangles subdivide for a smoother visual transition before
+        // detailed road LineStrings appear at minZoomForRoads.
+        zoomResolutions: {
+            7: 0.05, 8: 0.05,
+            9: 0.025, 10: 0.025,
+            11: 0.0125, 12: 0.0125,
+            13: 0.00625, 14: 0.00625
+        },
 
         // Minimum zoom level to show grid overlay
         minZoomForGrid: 12,
@@ -362,15 +373,15 @@ const HeatmapMap = (function() {
      * until all visible tiles are loaded or the user pans/zooms.
      */
     async function loadVisibleTiles() {
+        // Always cancel any in-progress batch continuation
+        const sessionId = ++loadSessionId;
+
         const zoom = map.getZoom();
 
         // Only load road data at higher zoom levels
         if (zoom < CONFIG.minZoomForRoads) {
             return;
         }
-
-        // Start a new session — any in-progress continuation stops
-        const sessionId = ++loadSessionId;
         await loadNextBatch(sessionId);
     }
 
@@ -625,31 +636,67 @@ const HeatmapMap = (function() {
     // ===== Coverage Summary (Low Zoom) =====
 
     /**
+     * Return the grid cell resolution for a given zoom level.
+     * Returns undefined for zooms outside the summary range.
+     */
+    function getResolutionForZoom(zoom) {
+        return CONFIG.zoomResolutions[zoom];
+    }
+
+    /**
      * Load the low-zoom coverage summary layer.
-     * Shows colored rectangles per tile at zoom 7–9, colored by
-     * the age of the most recent Street View capture in each tile.
+     * Shows colored rectangles whose size depends on the current zoom
+     * level — large cells at low zoom, progressively subdivided as the
+     * user zooms in, providing a smooth transition before detailed road
+     * LineStrings appear at minZoomForRoads.
      */
     async function loadSummaryLayer() {
         const zoom = map.getZoom();
+        const resolution = getResolutionForZoom(zoom);
 
-        // Only show summary at zoom 7–9 (below road detail, above country overview)
-        if (zoom < 7 || zoom >= CONFIG.minZoomForRoads) {
+        // Outside the summary zoom range — clear and bail out
+        if (resolution === undefined) {
             summaryLayer.clearLayers();
             return;
         }
 
         const bounds = map.getBounds();
+        const boundsObj = {
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest()
+        };
 
         try {
-            const response = await api.getTileSummary({
-                north: bounds.getNorth(),
-                south: bounds.getSouth(),
-                east: bounds.getEast(),
-                west: bounds.getWest()
-            });
+            const response = await api.getTileSummary(boundsObj, resolution);
 
             summaryLayer.clearLayers();
 
+            // New sub-tile cell format (returned when resolution param is sent)
+            if (response.cells) {
+                const half = resolution / 2;
+                for (const cell of response.cells) {
+                    const color = ageToColor(cell.latest_date);
+                    const rect = L.rectangle(
+                        [
+                            [cell.cell_lat - half, cell.cell_lon - half],
+                            [cell.cell_lat + half, cell.cell_lon + half]
+                        ],
+                        {
+                            color: color,
+                            weight: 0,
+                            fillColor: color,
+                            fillOpacity: 0.4,
+                            interactive: false
+                        }
+                    );
+                    rect.addTo(summaryLayer);
+                }
+                return;
+            }
+
+            // Fallback: original per-tile format (backward compatibility)
             for (const tile of (response.tiles || [])) {
                 const lat = CONFIG.tileOrigin.minLat + tile.lat_idx * CONFIG.tileSize;
                 const lon = CONFIG.tileOrigin.minLon + tile.lon_idx * CONFIG.tileSize;
@@ -665,7 +712,6 @@ const HeatmapMap = (function() {
                         interactive: false
                     }
                 );
-
                 rect.addTo(summaryLayer);
             }
         } catch (error) {
@@ -760,7 +806,20 @@ const HeatmapMap = (function() {
         // Update zoom level display
         updateZoomDisplay(zoom);
 
-        // Manage summary layer visibility based on zoom
+        // Manage layer visibility based on zoom.
+        // Below the road detail threshold, cancel any in-progress batch
+        // continuation, clear the road layer to free memory, and reset
+        // the tile cache so data is re-fetched when zooming back in.
+        if (zoom < CONFIG.minZoomForRoads) {
+            ++loadSessionId;
+            roadLayer.clearLayers();
+            loadedTiles.clear();
+            loadingTiles.clear();
+            hideTileLoading();
+        }
+
+        // At zoom >= minZoomForRoads, clear the summary rectangles
+        // so only detailed road LineStrings are visible.
         if (zoom >= 7 && zoom < CONFIG.minZoomForRoads) {
             loadSummaryLayer();
         } else {

@@ -449,6 +449,7 @@ def get_tiles_summary():
     south = request.args.get('south', type=float)
     east = request.args.get('east', type=float)
     west = request.args.get('west', type=float)
+    resolution = request.args.get('resolution', type=float)
 
     if any(v is None for v in [north, south, east, west]):
         return jsonify({"error": "Missing bounds parameters"}), 400
@@ -460,7 +461,20 @@ def get_tiles_summary():
     clamped_south = max(south, min_lat)
     clamped_north = min(north, max_lat)
 
-    # Compute visible tile IDs from bounds
+    # If a valid sub-tile resolution is requested, use PostGIS grid aggregation
+    ALLOWED_RESOLUTIONS = {0.05, 0.025, 0.0125, 0.00625}
+    if resolution is not None and resolution in ALLOWED_RESOLUTIONS:
+        try:
+            cells = database.get_grid_summaries(
+                clamped_west, clamped_south, clamped_east, clamped_north, resolution
+            )
+        except Exception as e:
+            logger.error("Failed to get grid summaries: %s", e)
+            return jsonify({"error": "Internal Error", "message": str(e)}), 500
+
+        return jsonify({"cells": cells, "resolution": resolution})
+
+    # Default: per-tile summaries (original behaviour)
     start_lon_idx = int((clamped_west - min_lon) / TILE_SIZE)
     end_lon_idx = int((clamped_east - min_lon) / TILE_SIZE) + 1
     start_lat_idx = int((clamped_south - min_lat) / TILE_SIZE)

@@ -123,15 +123,19 @@ class HeatmapAPI {
     /**
      * Get lightweight tile summaries for a bounding box (low-zoom overview)
      * @param {Object} bounds - Bounding box {north, south, east, west}
+     * @param {number} [resolution] - Optional grid cell size in degrees for sub-tile aggregation
      * @returns {Promise<Object>} Tile summaries with segment counts and latest dates
      */
-    async getTileSummary(bounds) {
+    async getTileSummary(bounds, resolution) {
         const params = {
             north: bounds.north,
             south: bounds.south,
             east: bounds.east,
             west: bounds.west
         };
+        if (resolution !== undefined) {
+            params.resolution = resolution;
+        }
         const queryString = this._buildQueryString(params);
         return this._fetch(`${this.baseUrl}/tiles/summary${queryString}`);
     }

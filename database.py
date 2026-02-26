@@ -725,3 +725,50 @@ def get_tile_summaries(tile_ids: List[str]) -> List[Dict]:
             }
             for row in cur.fetchall()
         ]
+
+
+def get_grid_summaries(west, south, east, north, resolution):
+    """Aggregate road_segments into grid cells at a given resolution.
+
+    Uses PostGIS ST_SnapToGrid to snap road segment centroids onto a
+    regular grid, then groups by cell and returns the segment count and
+    latest capture date per cell.  The GIST spatial index on
+    road_segments.geometry makes the bounding-box filter efficient.
+
+    Args:
+        west, south, east, north: Bounding box coordinates.
+        resolution: Grid cell size in degrees (e.g. 0.025).
+
+    Returns:
+        List of dicts with keys: cell_lon, cell_lat, segment_count, latest_date.
+    """
+    if _conn is None:
+        raise RuntimeError("Database not initialised")
+    if _backend != "postgresql":
+        return []
+
+    with _conn.cursor() as cur:
+        cur.execute("""
+            SELECT ST_X(cell) AS cell_lon,
+                   ST_Y(cell) AS cell_lat,
+                   COUNT(*)   AS segment_count,
+                   MAX(capture_date) AS latest_date
+            FROM (
+                SELECT ST_SnapToGrid(ST_Centroid(geometry), %s, %s, %s, %s) AS cell,
+                       capture_date
+                FROM road_segments
+                WHERE geometry && ST_MakeEnvelope(%s, %s, %s, %s, 4326)
+            ) sub
+            GROUP BY cell
+        """, (0.0, 0.0, resolution, resolution,
+              west, south, east, north))
+
+        return [
+            {
+                "cell_lon": row[0],
+                "cell_lat": row[1],
+                "segment_count": row[2],
+                "latest_date": row[3],
+            }
+            for row in cur.fetchall()
+        ]
