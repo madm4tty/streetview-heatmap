@@ -26,11 +26,13 @@
     --color-info: #0ea5e9;
 
     /* Age Colors (matches backend) */
-    --color-age-fresh: #22c55e;    /* <3 months - Green */
-    --color-age-recent: #eab308;   /* <1 year - Yellow */
-    --color-age-old: #f97316;      /* <3 years - Orange */
-    --color-age-stale: #ef4444;    /* 3+ years - Red */
-    --color-age-unknown: #6b7280;  /* Unknown - Gray */
+    --color-age-fresh: #22c55e;       /* <6 months - Bright green */
+    --color-age-recent: #84cc16;      /* <1 year - Lime/yellow-green */
+    --color-age-aging: #eab308;       /* <3 years - Yellow */
+    --color-age-old: #f97316;         /* <5 years - Orange */
+    --color-age-stale: #ef4444;       /* <10 years - Red */
+    --color-age-very-stale: #b91c1c;  /* 10+ years - Deep red/maroon */
+    --color-age-unknown: #6b7280;     /* Unknown - Gray */
 
     /* Backgrounds */
     --bg-primary: #ffffff;

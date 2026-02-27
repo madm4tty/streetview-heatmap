@@ -31,10 +31,12 @@ logger = logging.getLogger(__name__)
 
 # Age-based colors for visualization (days, color)
 AGE_COLORS = [
-    (90, "#00ff00"),      # < 3 months - green
-    (365, "#ffff00"),     # < 1 year - yellow
-    (3 * 365, "#ffa500"), # < 3 years - orange
-    (float("inf"), "#ff0000"),  # >= 3 years - red
+    (180, "#22c55e"),          # < 6 months - bright green
+    (365, "#84cc16"),          # < 1 year - lime/yellow-green
+    (3 * 365, "#eab308"),      # < 3 years - yellow
+    (5 * 365, "#f97316"),      # < 5 years - orange
+    (10 * 365, "#ef4444"),     # < 10 years - red
+    (float("inf"), "#b91c1c"), # >= 10 years - deep red/maroon
 ]
 
 # Road importance multipliers for adaptive sampling

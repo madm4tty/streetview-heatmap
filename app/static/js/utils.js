@@ -154,19 +154,23 @@ function calculateAgeMonths(dateString) {
  * Age thresholds in months for color coding
  */
 const AGE_THRESHOLDS = {
-    FRESH: 3,      // < 3 months = green
-    RECENT: 12,    // < 1 year = yellow
-    OLD: 36        // < 3 years = orange, >= 3 years = red
+    FRESH: 6,      // < 6 months = bright green
+    RECENT: 12,    // < 1 year = lime/yellow-green
+    AGING: 36,     // < 3 years = yellow
+    OLD: 60,       // < 5 years = orange
+    STALE: 120     // < 10 years = red, >= 10 years = deep red
 };
 
 /**
  * Color scheme for age-based visualization
  */
 const AGE_COLORS = {
-    FRESH: '#22c55e',   // Green
-    RECENT: '#eab308',  // Yellow
+    FRESH: '#22c55e',   // Bright green
+    RECENT: '#84cc16',  // Lime/yellow-green
+    AGING: '#eab308',   // Yellow
     OLD: '#f97316',     // Orange
     STALE: '#ef4444',   // Red
+    VERY_STALE: '#b91c1c', // Deep red/maroon
     UNKNOWN: '#6b7280'  // Gray
 };
 
@@ -182,8 +186,10 @@ function ageToColor(dateString) {
 
     if (ageMonths < AGE_THRESHOLDS.FRESH) return AGE_COLORS.FRESH;
     if (ageMonths < AGE_THRESHOLDS.RECENT) return AGE_COLORS.RECENT;
+    if (ageMonths < AGE_THRESHOLDS.AGING) return AGE_COLORS.AGING;
     if (ageMonths < AGE_THRESHOLDS.OLD) return AGE_COLORS.OLD;
-    return AGE_COLORS.STALE;
+    if (ageMonths < AGE_THRESHOLDS.STALE) return AGE_COLORS.STALE;
+    return AGE_COLORS.VERY_STALE;
 }
 
 /**
@@ -196,10 +202,12 @@ function getAgeCategory(dateString) {
 
     const ageMonths = calculateAgeMonths(dateString);
 
-    if (ageMonths < AGE_THRESHOLDS.FRESH) return 'Fresh (<3 months)';
+    if (ageMonths < AGE_THRESHOLDS.FRESH) return 'Fresh (<6 months)';
     if (ageMonths < AGE_THRESHOLDS.RECENT) return 'Recent (<1 year)';
-    if (ageMonths < AGE_THRESHOLDS.OLD) return 'Dated (<3 years)';
-    return 'Stale (3+ years)';
+    if (ageMonths < AGE_THRESHOLDS.AGING) return 'Aging (<3 years)';
+    if (ageMonths < AGE_THRESHOLDS.OLD) return 'Old (<5 years)';
+    if (ageMonths < AGE_THRESHOLDS.STALE) return 'Stale (<10 years)';
+    return 'Very stale (10+ years)';
 }
 
 // ===== Number Formatting =====

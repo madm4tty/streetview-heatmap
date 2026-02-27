@@ -259,8 +259,10 @@
 
 .legend-color.fresh { background: var(--color-age-fresh); }
 .legend-color.recent { background: var(--color-age-recent); }
+.legend-color.aging { background: var(--color-age-aging); }
 .legend-color.old { background: var(--color-age-old); }
 .legend-color.stale { background: var(--color-age-stale); }
+.legend-color.very-stale { background: var(--color-age-very-stale); }
 .legend-color.unknown { background: var(--color-age-unknown); }
 
 .legend-label {
@@ -493,8 +495,10 @@
 
 .road-segment.fresh { stroke: var(--color-age-fresh); }
 .road-segment.recent { stroke: var(--color-age-recent); }
+.road-segment.aging { stroke: var(--color-age-aging); }
 .road-segment.old { stroke: var(--color-age-old); }
 .road-segment.stale { stroke: var(--color-age-stale); }
+.road-segment.very-stale { stroke: var(--color-age-very-stale); }
 .road-segment.unknown { stroke: var(--color-age-unknown); }
 
 /* ===== Zoom Controls ===== */

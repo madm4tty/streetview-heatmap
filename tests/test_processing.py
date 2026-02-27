@@ -183,7 +183,7 @@ class TestAgeToColor:
 
         recent_date = (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%d')
         color = age_to_color(recent_date)
-        assert color == '#00ff00'
+        assert color == '#22c55e'
 
     def test_old_is_red(self):
         """Old imagery is red."""
@@ -191,7 +191,7 @@ class TestAgeToColor:
 
         old_date = '2019-01-01'
         color = age_to_color(old_date)
-        assert color == '#ff0000'
+        assert color == '#ef4444'
 
     def test_invalid_date_is_gray(self):
         """Invalid date returns gray."""
