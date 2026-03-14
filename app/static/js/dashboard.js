@@ -252,10 +252,17 @@ const Dashboard = (function() {
             const duration = job.started_at && job.completed_at ?
                 calculateDuration(job.started_at, job.completed_at) : null;
 
+            let areaCell = '--';
+            if (job.area_name && job.area_center) {
+                const mapsUrl = `https://www.google.com/maps/@${job.area_center.lat},${job.area_center.lon},13z`;
+                areaCell = `<a href="${mapsUrl}" target="_blank" rel="noopener">${job.area_name}</a>`;
+            }
+
             return `
                         <tr>
                             <td><code>${formatJobId(job.job_id)}</code></td>
                             <td><span class="badge ${getStatusBadgeClass(job.status)}">${job.status || 'Unknown'}</span></td>
+                            <td>${areaCell}</td>
                             <td>${job.priority_filter || 'All'}</td>
                             <td>${formatNumber(job.tiles_processed || 0)}</td>
                             <td>${formatNumber(job.locations_updated || 0)}</td>
@@ -271,6 +278,7 @@ const Dashboard = (function() {
                         <tr>
                             <th>Job ID</th>
                             <th>Status</th>
+                            <th>Area</th>
                             <th>Priority</th>
                             <th>Tiles</th>
                             <th>Locations</th>

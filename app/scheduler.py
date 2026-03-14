@@ -4,6 +4,7 @@ Uses APScheduler for scheduling periodic update jobs that process
 tiles, fetch Street View metadata, and update the database.
 """
 
+import json
 import logging
 import os
 import threading
@@ -63,22 +64,25 @@ def _create_job_record(
     job_id: str,
     priority_filter: Optional[str] = None,
     tile_limit: Optional[int] = None,
-    tiles_total: Optional[int] = None
+    tiles_total: Optional[int] = None,
+    tiles_list: Optional[List[str]] = None
 ) -> None:
     """Create a job record in the database."""
     if not database.is_postgresql():
         logger.warning("Job status tracking requires PostgreSQL")
         return
 
+    tiles_list_json = json.dumps(tiles_list) if tiles_list else None
+
     try:
         with database._conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO job_status (
                     job_id, status, started_at, priority_filter,
-                    tile_limit, tiles_total
-                ) VALUES (%s, %s, %s, %s, %s, %s)
+                    tile_limit, tiles_total, tiles_list
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (job_id, 'running', datetime.utcnow(), priority_filter,
-                  tile_limit, tiles_total))
+                  tile_limit, tiles_total, tiles_list_json))
         database._conn.commit()
     except Exception as e:
         logger.error("Failed to create job record: %s", e)
@@ -134,6 +138,32 @@ def _complete_job_record(
         database._conn.rollback()
 
 
+def _row_to_job_dict(row) -> Dict[str, Any]:
+    """Convert a job_status row to a dictionary."""
+    return {
+        "id": row[0],
+        "job_id": row[1],
+        "status": row[2],
+        "started_at": row[3],
+        "completed_at": row[4],
+        "priority_filter": row[5],
+        "tile_limit": row[6],
+        "tiles_processed": row[7],
+        "tiles_total": row[8],
+        "locations_updated": row[9],
+        "api_calls": row[10],
+        "error_message": row[11],
+        "tiles_list": row[12] if len(row) > 12 else None,
+    }
+
+
+# Common SELECT columns for job_status queries
+_JOB_COLUMNS = """id, job_id, status, started_at, completed_at,
+                   priority_filter, tile_limit, tiles_processed,
+                   tiles_total, locations_updated, api_calls, error_message,
+                   tiles_list"""
+
+
 def get_job_record(job_id: str) -> Optional[Dict[str, Any]]:
     """Get a job record from the database."""
     if not database.is_postgresql():
@@ -141,29 +171,14 @@ def get_job_record(job_id: str) -> Optional[Dict[str, Any]]:
 
     try:
         with database._conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, job_id, status, started_at, completed_at,
-                       priority_filter, tile_limit, tiles_processed,
-                       tiles_total, locations_updated, api_calls, error_message
+            cur.execute(f"""
+                SELECT {_JOB_COLUMNS}
                 FROM job_status
                 WHERE job_id = %s
             """, (job_id,))
             row = cur.fetchone()
             if row:
-                return {
-                    "id": row[0],
-                    "job_id": row[1],
-                    "status": row[2],
-                    "started_at": row[3],
-                    "completed_at": row[4],
-                    "priority_filter": row[5],
-                    "tile_limit": row[6],
-                    "tiles_processed": row[7],
-                    "tiles_total": row[8],
-                    "locations_updated": row[9],
-                    "api_calls": row[10],
-                    "error_message": row[11]
-                }
+                return _row_to_job_dict(row)
     except Exception as e:
         logger.error("Failed to get job record: %s", e)
     return None
@@ -176,10 +191,8 @@ def get_last_completed_job() -> Optional[Dict[str, Any]]:
 
     try:
         with database._conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, job_id, status, started_at, completed_at,
-                       priority_filter, tile_limit, tiles_processed,
-                       tiles_total, locations_updated, api_calls, error_message
+            cur.execute(f"""
+                SELECT {_JOB_COLUMNS}
                 FROM job_status
                 WHERE status = 'completed'
                 ORDER BY completed_at DESC
@@ -187,20 +200,7 @@ def get_last_completed_job() -> Optional[Dict[str, Any]]:
             """)
             row = cur.fetchone()
             if row:
-                return {
-                    "id": row[0],
-                    "job_id": row[1],
-                    "status": row[2],
-                    "started_at": row[3],
-                    "completed_at": row[4],
-                    "priority_filter": row[5],
-                    "tile_limit": row[6],
-                    "tiles_processed": row[7],
-                    "tiles_total": row[8],
-                    "locations_updated": row[9],
-                    "api_calls": row[10],
-                    "error_message": row[11]
-                }
+                return _row_to_job_dict(row)
     except Exception as e:
         logger.error("Failed to get last completed job: %s", e)
     return None
@@ -220,33 +220,15 @@ def get_recent_jobs(limit: int = 10) -> List[Dict[str, Any]]:
 
     try:
         with database._conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, job_id, status, started_at, completed_at,
-                       priority_filter, tile_limit, tiles_processed,
-                       tiles_total, locations_updated, api_calls, error_message
+            cur.execute(f"""
+                SELECT {_JOB_COLUMNS}
                 FROM job_status
                 WHERE status IN ('completed', 'failed')
                 ORDER BY completed_at DESC
                 LIMIT %s
             """, (limit,))
             rows = cur.fetchall()
-            return [
-                {
-                    "id": row[0],
-                    "job_id": row[1],
-                    "status": row[2],
-                    "started_at": row[3],
-                    "completed_at": row[4],
-                    "priority_filter": row[5],
-                    "tile_limit": row[6],
-                    "tiles_processed": row[7],
-                    "tiles_total": row[8],
-                    "locations_updated": row[9],
-                    "api_calls": row[10],
-                    "error_message": row[11]
-                }
-                for row in rows
-            ]
+            return [_row_to_job_dict(row) for row in rows]
     except Exception as e:
         logger.error("Failed to get recent jobs: %s", e)
     return []
@@ -298,6 +280,11 @@ def _get_tiles_to_process(
     tiles_to_process = []
 
     try:
+        # Exclude tiles known to have no OSM roads (ocean, sea, etc.)
+        empty_tiles = database.get_empty_tiles()
+        if empty_tiles:
+            logger.info("Excluding %d empty tiles (no roads)", len(empty_tiles))
+
         with database._conn.cursor() as cur:
             # Get set of tiles that already exist in metadata
             cur.execute("SELECT DISTINCT tile_id FROM metadata")
@@ -313,7 +300,9 @@ def _get_tiles_to_process(
 
                 # Find tiles of this priority that don't exist in metadata
                 for tile in available_tiles:
-                    if tile["priority"] == priority and tile["tile_id"] not in existing_tiles:
+                    if (tile["priority"] == priority
+                            and tile["tile_id"] not in existing_tiles
+                            and tile["tile_id"] not in empty_tiles):
                         if tile["tile_id"] not in tiles_to_process:
                             tiles_to_process.append(tile["tile_id"])
                             if len(tiles_to_process) >= limit:
@@ -430,7 +419,7 @@ def run_update_job(
         }
 
     # Create job record
-    _create_job_record(job_id, priority_filter, tile_limit, len(tiles))
+    _create_job_record(job_id, priority_filter, tile_limit, len(tiles), tiles)
 
     logger.info("Starting update job %s: %d tiles to process", job_id, len(tiles))
 

@@ -360,6 +360,9 @@ def process_tile(
     roads = fetch_osm_roads(bbox)
 
     if not roads:
+        # Mark this tile as empty so the scheduler doesn't re-process it
+        database.save_empty_tile(tile_id)
+        logger.info("Tile %s has no roads — marked as empty", tile_id)
         return {
             "tile_id": tile_id,
             "roads_found": 0,

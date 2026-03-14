@@ -174,6 +174,15 @@ def _init_postgresql() -> None:
             ON road_segments USING GIST(geometry)
         """)
 
+        # Create empty_tiles table to track tiles with no OSM roads
+        # Prevents the scheduler from re-processing ocean/sea tiles endlessly
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS empty_tiles (
+                tile_id VARCHAR(20) PRIMARY KEY,
+                checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
     _conn.commit()
 
 
@@ -772,3 +781,38 @@ def get_grid_summaries(west, south, east, north, resolution):
             }
             for row in cur.fetchall()
         ]
+
+
+# ============================================================================
+# Empty tiles tracking (PostgreSQL only)
+# ============================================================================
+
+def save_empty_tile(tile_id: str) -> None:
+    """Record a tile as having no OSM roads, so the scheduler skips it.
+
+    Uses INSERT ... ON CONFLICT to update the timestamp if already recorded.
+    """
+    if _conn is None:
+        raise RuntimeError("Database not initialised")
+    if _backend != "postgresql":
+        return
+
+    with _conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO empty_tiles (tile_id, checked_at)
+            VALUES (%s, CURRENT_TIMESTAMP)
+            ON CONFLICT (tile_id) DO UPDATE SET checked_at = CURRENT_TIMESTAMP
+        """, (tile_id,))
+    _conn.commit()
+
+
+def get_empty_tiles() -> set:
+    """Return the set of tile IDs that have been marked as empty (no roads)."""
+    if _conn is None:
+        raise RuntimeError("Database not initialised")
+    if _backend != "postgresql":
+        return set()
+
+    with _conn.cursor() as cur:
+        cur.execute("SELECT tile_id FROM empty_tiles")
+        return {row[0] for row in cur.fetchall()}

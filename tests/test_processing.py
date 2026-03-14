@@ -223,9 +223,10 @@ class TestProcessTile:
         assert 'locations_checked' in result
         assert 'duration_seconds' in result
 
+    @patch('app.processing.database.save_empty_tile')
     @patch('app.processing.fetch_osm_roads')
-    def test_handles_no_roads(self, mock_roads):
-        """Handles tiles with no roads."""
+    def test_handles_no_roads(self, mock_roads, mock_save_empty):
+        """Handles tiles with no roads and marks tile as empty."""
         from app.processing import process_tile
 
         mock_roads.return_value = []
@@ -234,6 +235,7 @@ class TestProcessTile:
 
         assert result['roads_found'] == 0
         assert result['locations_checked'] == 0
+        mock_save_empty.assert_called_once_with('tile_126_78')
 
 
 class TestGetTileGeojson:

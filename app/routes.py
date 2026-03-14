@@ -7,6 +7,7 @@ Provides endpoints for:
 - Configuration management
 """
 
+import json
 import logging
 from datetime import datetime
 from functools import wraps
@@ -17,6 +18,7 @@ from flask import Blueprint, current_app, jsonify, request
 import database
 from geographic_scope import (
     generate_uk_tiles,
+    get_nearest_city,
     get_tile_bbox,
     get_tile_priority,
     UK_MAJOR_CITIES,
@@ -213,6 +215,28 @@ def get_status():
         recent_jobs_raw = get_recent_jobs(limit=5)
         recent_jobs_list = []
         for rj in recent_jobs_raw:
+            # Compute area name and center from tiles_list
+            area_name = None
+            area_center = None
+            tiles_list_raw = rj.get("tiles_list")
+            if tiles_list_raw:
+                try:
+                    tile_ids = json.loads(tiles_list_raw)
+                    if tile_ids:
+                        # Compute bounding box center across all tiles
+                        all_lats = []
+                        all_lons = []
+                        for tid in tile_ids:
+                            bbox = get_tile_bbox(tid)
+                            all_lons.extend([bbox[0], bbox[2]])
+                            all_lats.extend([bbox[1], bbox[3]])
+                        center_lat = (min(all_lats) + max(all_lats)) / 2
+                        center_lon = (min(all_lons) + max(all_lons)) / 2
+                        area_center = {"lat": round(center_lat, 4), "lon": round(center_lon, 4)}
+                        area_name = get_nearest_city(center_lat, center_lon)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
             recent_jobs_list.append({
                 "job_id": rj.get("job_id"),
                 "status": rj.get("status"),
@@ -223,6 +247,8 @@ def get_status():
                 "locations_updated": rj.get("locations_updated", 0),
                 "api_calls": rj.get("api_calls", 0),
                 "error_message": rj.get("error_message"),
+                "area_name": area_name,
+                "area_center": area_center,
             })
 
         next_run = get_next_run_time()

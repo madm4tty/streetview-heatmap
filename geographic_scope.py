@@ -6,7 +6,7 @@ This module defines:
 - Tile system for dividing UK into manageable chunks
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # UK bounding box (covers mainland UK including Scotland)
 UK_BOUNDS = (-8.0, 49.9, 2.0, 60.9)  # (min_lon, min_lat, max_lon, max_lat)
@@ -348,6 +348,49 @@ def get_tile_count() -> int:
     lon_count = int((max_lon - min_lon) / TILE_SIZE)
     lat_count = int((max_lat - min_lat) / TILE_SIZE)
     return lon_count * lat_count
+
+
+def get_nearest_city(lat: float, lon: float) -> Optional[str]:
+    """Find the nearest UK city to a coordinate.
+
+    Checks if the point falls inside any city bounding box. If not,
+    finds the city whose center is closest (Euclidean approximation).
+
+    Args:
+        lat: Latitude
+        lon: Longitude
+
+    Returns:
+        Human-readable city name, or None if no cities defined
+    """
+    # First check if point is inside any city bbox
+    best_priority_order = {"high": 0, "medium": 1, "low": 2}
+    inside_cities = []
+    for name, data in UK_MAJOR_CITIES.items():
+        bbox = data["bbox"]
+        if bbox[0] <= lon <= bbox[2] and bbox[1] <= lat <= bbox[3]:
+            inside_cities.append((name, data["priority"]))
+
+    if inside_cities:
+        # Return highest-priority city the point is inside
+        inside_cities.sort(key=lambda c: best_priority_order.get(c[1], 3))
+        return inside_cities[0][0].replace("_", " ").title()
+
+    # Find nearest city by center distance
+    best_name = None
+    best_dist = float("inf")
+    for name, data in UK_MAJOR_CITIES.items():
+        bbox = data["bbox"]
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
+        dist = (lon - cx) ** 2 + (lat - cy) ** 2
+        if dist < best_dist:
+            best_dist = dist
+            best_name = name
+
+    if best_name:
+        return best_name.replace("_", " ").title()
+    return None
 
 
 def get_city_tiles(city_name: str) -> List[str]:
