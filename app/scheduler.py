@@ -26,6 +26,13 @@ from app.processing import process_tile
 
 logger = logging.getLogger(__name__)
 
+# Freshness thresholds (days) — shared with routes.py for coverage display.
+# "low" uses min_age_for_recheck_days from config (default 90).
+FRESHNESS_THRESHOLDS = {
+    "high": 30,
+    "medium": 60,
+}
+
 # Module-level state
 _scheduler: Optional[BackgroundScheduler] = None
 _current_job: Optional[Dict[str, Any]] = None
@@ -244,12 +251,10 @@ def _get_tiles_to_process(
     Priority order:
     1. High priority tiles never processed (not in metadata)
     2. Medium priority tiles never processed (not in metadata)
-    3. High priority tiles with stale data (>3 years old)
-    4. Medium priority tiles with stale data (>3 years old)
-    5. High priority tiles with data >1 year old
-    6. Medium priority tiles with data >1 year old
-    7. Low priority tiles never processed
-    8. Low priority tiles with stale data (>min_age_days)
+    3. Low priority tiles never processed
+    4. High priority tiles with stale data (>30 days)
+    5. Medium priority tiles with stale data (>60 days)
+    6. Low priority tiles with stale data (>min_age_days, default 90)
 
     Args:
         priority_filter: Optional filter by priority level
@@ -311,11 +316,9 @@ def _get_tiles_to_process(
             # Phase 2: Add tiles with stale data that need refreshing
             if len(tiles_to_process) < limit:
                 age_thresholds = [
-                    (3 * 365, "high"),    # High priority > 3 years
-                    (3 * 365, "medium"),  # Medium priority > 3 years
-                    (365, "high"),        # High priority > 1 year
-                    (365, "medium"),      # Medium priority > 1 year
-                    (min_age_days, "low") # Low priority > min_age
+                    (FRESHNESS_THRESHOLDS["high"], "high"),      # High priority > 30 days
+                    (FRESHNESS_THRESHOLDS["medium"], "medium"),  # Medium priority > 60 days
+                    (min_age_days, "low"),                       # Low priority > min_age (default 90)
                 ]
 
                 for age_days, priority in age_thresholds:

@@ -9,7 +9,7 @@ Provides endpoints for:
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from typing import Any, Dict, Optional
 
@@ -31,6 +31,7 @@ from app.models import (
     Priority,
 )
 from app.scheduler import (
+    FRESHNESS_THRESHOLDS,
     get_current_job,
     get_last_completed_job,
     get_next_run_time,
@@ -121,13 +122,7 @@ def get_status():
     current job info, and database statistics.
     """
     try:
-        # Get coverage statistics
-        coverage_stats = database.get_coverage_stats()
-
-        # Calculate coverage by priority
-        # Use tile-level coverage from the database, counting distinct
-        # tile_ids that have data.  Rows with NULL priority (legacy data)
-        # are attributed to the correct priority via geographic lookup.
+        # Build tile priority lookup
         coverage = {}
         all_tiles = generate_uk_tiles()
         tiles_by_priority = {}
@@ -136,45 +131,51 @@ def get_status():
             tiles_by_priority.setdefault(t['priority'], []).append(t)
             tile_priority_lookup[t['tile_id']] = t['priority']
 
-        # Count tiles with data per priority using the database
-        tiles_with_data_by_priority = {'high': set(), 'medium': set(), 'low': set()}
+        # Get freshness stats — one query returns {tile_id: oldest_check_datetime}
+        freshness_stats = {}
         if database.is_postgresql():
             try:
-                with database._conn.cursor() as cur:
-                    cur.execute("SELECT DISTINCT tile_id FROM metadata WHERE tile_id IS NOT NULL")
-                    for row in cur.fetchall():
-                        tid = row[0]
-                        p = tile_priority_lookup.get(tid)
-                        if p and p in tiles_with_data_by_priority:
-                            tiles_with_data_by_priority[p].add(tid)
+                freshness_stats = database.get_tile_freshness_stats()
             except Exception as e:
-                logger.warning("Failed to query tile coverage: %s", e)
+                logger.warning("Failed to query tile freshness: %s", e)
 
-        by_priority = coverage_stats.get('by_priority', {})
+        # Build freshness thresholds per priority
+        min_age_days = current_app.config.get('update', {}).get('min_age_for_recheck_days', 90)
+        thresholds = {
+            'high': FRESHNESS_THRESHOLDS['high'],
+            'medium': FRESHNESS_THRESHOLDS['medium'],
+            'low': min_age_days,
+        }
+
+        now = datetime.utcnow()
 
         for priority in ['high', 'medium', 'low']:
-            priority_data = by_priority.get(priority, {})
-            total_entries = priority_data.get('total_entries', 0)
-            with_date = priority_data.get('entries_with_date', 0)
-
-            # Also include entries with unset priority that belong to
-            # tiles of this priority level (legacy data)
-            unset_data = by_priority.get('unset', {})
-            if unset_data:
-                # These are already counted via tile_id lookup above
-                pass
-
-            tiles = len(tiles_with_data_by_priority.get(priority, set()))
             total_tiles = len(tiles_by_priority.get(priority, []))
+            threshold_days = thresholds[priority]
+            cutoff = now - timedelta(days=threshold_days)
+
+            fresh_count = 0
+            stale_count = 0
+            unchecked_count = 0
+
+            for tile in tiles_by_priority.get(priority, []):
+                oldest_check = freshness_stats.get(tile['tile_id'])
+                if oldest_check is None:
+                    unchecked_count += 1
+                elif oldest_check >= cutoff:
+                    fresh_count += 1
+                else:
+                    stale_count += 1
 
             coverage[priority] = {
                 "total": total_tiles,
-                "with_data": tiles,
-                "total_tiles": total_tiles,
-                "tiles_with_data": tiles,
-                "locations_total": total_entries,
-                "locations_checked": with_date,
-                "percent_complete": round((tiles / total_tiles * 100), 1) if total_tiles > 0 else 0
+                "fresh": fresh_count,
+                "stale": stale_count,
+                "unchecked": unchecked_count,
+                "freshness_threshold_days": threshold_days,
+                # Backward compat
+                "with_data": fresh_count + stale_count,
+                "checked": fresh_count + stale_count,
             }
 
         # Get current job info
@@ -256,7 +257,7 @@ def get_status():
 
         # Get database stats
         db_stats = database.get_cache_stats()
-        unique_tiles = coverage_stats.get('total_tiles_with_data', 0)
+        unique_tiles = len(freshness_stats)
 
         total_entries = db_stats.get("total_entries", 0)
         with_dates = db_stats.get("entries_with_date", 0)

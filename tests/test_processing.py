@@ -206,8 +206,9 @@ class TestProcessTile:
 
     @patch('app.processing.fetch_osm_roads')
     @patch('database.get_metadata_batch')
+    @patch('database.save_metadata_batch')
     @patch('database.init_db')
-    def test_returns_stats(self, mock_init, mock_batch, mock_roads):
+    def test_returns_stats(self, mock_init, mock_save_batch, mock_batch, mock_roads):
         """Process tile returns statistics."""
         from app.processing import process_tile
 

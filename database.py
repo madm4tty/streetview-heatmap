@@ -183,6 +183,15 @@ def _init_postgresql() -> None:
             )
         """)
 
+        # Backfill NULL tile_ids on existing rows (one-time migration).
+        # Uses the same formula as _compute_tile_id().
+        cur.execute("""
+            UPDATE metadata SET tile_id = 'tile_' ||
+                FLOOR((lon - (-8.0)) / 0.05)::int || '_' ||
+                FLOOR((lat - 49.9) / 0.05)::int
+            WHERE tile_id IS NULL
+        """)
+
     _conn.commit()
 
 
@@ -283,6 +292,7 @@ def save_metadata(lat: float, lon: float, date: str, commit: bool = True,
                 VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT (lat, lon) DO UPDATE SET
                     date = EXCLUDED.date,
+                    tile_id = COALESCE(EXCLUDED.tile_id, metadata.tile_id),
                     priority = COALESCE(EXCLUDED.priority, metadata.priority),
                     last_checked = CURRENT_TIMESTAMP,
                     fetched_at = CURRENT_TIMESTAMP
@@ -332,6 +342,7 @@ def save_metadata_batch(entries: List[Tuple[float, float, str]],
                 VALUES %s
                 ON CONFLICT (lat, lon) DO UPDATE SET
                     date = EXCLUDED.date,
+                    tile_id = COALESCE(EXCLUDED.tile_id, metadata.tile_id),
                     priority = COALESCE(EXCLUDED.priority, metadata.priority),
                     last_checked = CURRENT_TIMESTAMP,
                     fetched_at = CURRENT_TIMESTAMP
@@ -816,3 +827,65 @@ def get_empty_tiles() -> set:
     with _conn.cursor() as cur:
         cur.execute("SELECT tile_id FROM empty_tiles")
         return {row[0] for row in cur.fetchall()}
+
+
+def get_tile_freshness_stats() -> Dict[str, Optional[datetime]]:
+    """Return {tile_id: oldest_check_timestamp} for all checked tiles.
+
+    Combines metadata and empty_tiles tables. Uses MIN(last_checked) per
+    tile so a tile is only "fresh" if its oldest point was checked recently.
+    Returns empty dict for SQLite backend.
+    """
+    if _conn is None:
+        raise RuntimeError("Database not initialised")
+    if _backend != "postgresql":
+        return {}
+
+    try:
+        with _conn.cursor() as cur:
+            cur.execute("""
+                WITH tile_ages AS (
+                    SELECT tile_id, MIN(last_checked) AS oldest_check
+                    FROM metadata
+                    WHERE tile_id IS NOT NULL
+                    GROUP BY tile_id
+                    UNION ALL
+                    SELECT tile_id, checked_at AS oldest_check
+                    FROM empty_tiles
+                )
+                SELECT tile_id, MIN(oldest_check)
+                FROM tile_ages
+                GROUP BY tile_id
+            """)
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception as e:
+        try:
+            _conn.rollback()
+        except Exception:
+            pass
+        raise
+
+
+def get_distinct_tile_ids() -> set:
+    """Return set of distinct tile_ids that have data in the metadata table.
+
+    Encapsulates the direct cursor access so routes don't need to touch _conn.
+    Returns an empty set for SQLite backend.
+    """
+    if _conn is None:
+        raise RuntimeError("Database not initialised")
+    if _backend != "postgresql":
+        return set()
+
+    try:
+        with _conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT tile_id FROM metadata WHERE tile_id IS NOT NULL"
+            )
+            return {row[0] for row in cur.fetchall()}
+    except Exception as e:
+        try:
+            _conn.rollback()
+        except Exception:
+            pass
+        raise

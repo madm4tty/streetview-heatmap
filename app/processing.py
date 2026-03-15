@@ -286,9 +286,11 @@ async def fetch_streetview_metadata_batch(
             async with batch_lock:
                 status_counts[status] = status_counts.get(status, 0) + 1
 
-                if date:
-                    batch_to_save.append((lat, lon, date))
-                    if len(batch_to_save) >= batch_save_size:
+                # Save all checked points (date may be None for ZERO_RESULTS).
+                # This ensures tile_id is recorded even when there's no SV coverage,
+                # so coverage progress reflects tiles that have been checked.
+                batch_to_save.append((lat, lon, date))
+                if len(batch_to_save) >= batch_save_size:
                         entries = batch_to_save.copy()
                         batch_to_save.clear()
                         loop = asyncio.get_event_loop()

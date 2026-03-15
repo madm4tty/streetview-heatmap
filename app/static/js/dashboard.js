@@ -180,31 +180,42 @@ const Dashboard = (function() {
         ];
 
         container.innerHTML = priorities.map(p => {
-            const data = coverage[p.key] || { with_data: 0, total: 0 };
-            const percent = data.total > 0 ? (data.with_data / data.total) * 100 : 0;
+            const data = coverage[p.key] || { fresh: 0, stale: 0, unchecked: 0, total: 0, freshness_threshold_days: 90 };
+            const fresh = data.fresh || 0;
+            const stale = data.stale || 0;
+            const unchecked = data.unchecked || 0;
+            const total = data.total || 0;
+            const threshold = data.freshness_threshold_days || 90;
+
+            const freshPercent = total > 0 ? (fresh / total) * 100 : 0;
+            const checkedPercent = total > 0 ? ((fresh + stale) / total) * 100 : 0;
 
             return `
                 <div class="progress-wrapper">
                     <div class="progress-header">
                         <span class="progress-label">${p.label}</span>
-                        <span class="progress-value">${formatPercentage(data.with_data, data.total)} (${formatNumber(data.with_data)} / ${formatNumber(data.total)} tiles)</span>
+                        <span class="progress-value">${Math.round(freshPercent)}% up to date (${formatNumber(stale)} stale, ${formatNumber(unchecked)} unchecked) \u2014 within ${threshold}d</span>
                     </div>
-                    <div class="progress">
-                        <div class="progress-bar progress-${p.color}" style="width: ${percent}%"></div>
+                    <div class="progress" style="position: relative;">
+                        <div class="progress-bar" style="width: ${checkedPercent}%; opacity: 0.3; background: var(--text-muted); position: absolute; top: 0; left: 0; height: 100%;"></div>
+                        <div class="progress-bar progress-${p.color}" style="width: ${freshPercent}%; position: relative; z-index: 1;"></div>
                     </div>
                 </div>
             `;
         }).join('');
 
-        // Add total
-        const totalWithData = (coverage.high?.with_data || 0) + (coverage.medium?.with_data || 0) + (coverage.low?.with_data || 0);
+        // Add total summary
+        const totalFresh = (coverage.high?.fresh || 0) + (coverage.medium?.fresh || 0) + (coverage.low?.fresh || 0);
+        const totalStale = (coverage.high?.stale || 0) + (coverage.medium?.stale || 0) + (coverage.low?.stale || 0);
+        const totalUnchecked = (coverage.high?.unchecked || 0) + (coverage.medium?.unchecked || 0) + (coverage.low?.unchecked || 0);
         const totalTiles = (coverage.high?.total || 0) + (coverage.medium?.total || 0) + (coverage.low?.total || 0);
+        const totalFreshPercent = totalTiles > 0 ? Math.round((totalFresh / totalTiles) * 100) : 0;
 
         container.innerHTML += `
             <div class="mt-md pt-md" style="border-top: 1px solid var(--border-color);">
                 <div class="d-flex justify-between">
-                    <span class="text-muted">Total Coverage</span>
-                    <strong>${formatPercentage(totalWithData, totalTiles)} (${formatNumber(totalWithData)} / ${formatNumber(totalTiles)} tiles)</strong>
+                    <span class="text-muted">Total</span>
+                    <strong>${totalFreshPercent}% up to date (${formatNumber(totalStale)} stale, ${formatNumber(totalUnchecked)} unchecked)</strong>
                 </div>
             </div>
         `;
