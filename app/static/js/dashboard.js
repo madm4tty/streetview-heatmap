@@ -36,7 +36,7 @@ const Dashboard = (function() {
             const status = await api.getStatus();
             updateSystemStatus(status);
             updateCurrentJob(status.current_job);
-            updateCoverageStats(status.coverage);
+            updateCoverageStats(status.coverage, status.freshness_error);
             updateDbStats(status);
             updateRecentActivity(status.recent_jobs || (status.last_job ? [status.last_job] : []));
 
@@ -164,7 +164,7 @@ const Dashboard = (function() {
     /**
      * Update coverage statistics
      */
-    function updateCoverageStats(coverage) {
+    function updateCoverageStats(coverage, freshnessError) {
         const container = document.getElementById('coverage-stats');
         if (!container) return;
 
@@ -219,6 +219,12 @@ const Dashboard = (function() {
                 </div>
             </div>
         `;
+
+        if (freshnessError) {
+            container.innerHTML = `<div style="padding: 8px 12px; margin-bottom: 12px; background: var(--warning-bg, #fff3cd); border: 1px solid var(--warning-border, #ffc107); border-radius: 4px; color: var(--warning-text, #856404);">
+                <strong>Warning:</strong> Freshness data unavailable — tile counts may be inaccurate.
+            </div>` + container.innerHTML;
+        }
     }
 
     /**

@@ -8,10 +8,13 @@ PostgreSQL requires PostGIS extension for spatial operations.
 """
 
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
+
+logger = logging.getLogger(__name__)
 
 # Coordinate precision: 6 decimal places (~0.1m accuracy)
 COORD_PRECISION = 6
@@ -191,6 +194,28 @@ def _init_postgresql() -> None:
                 FLOOR((lat - 49.9) / 0.05)::int
             WHERE tile_id IS NULL
         """)
+
+        # Backfill NULL priority on existing rows using geographic tile priority.
+        # This ensures the reset script and scheduler can filter by priority.
+        cur.execute("""
+            SELECT DISTINCT tile_id FROM metadata
+            WHERE priority IS NULL AND tile_id IS NOT NULL
+        """)
+        null_priority_tiles = [row[0] for row in cur.fetchall()]
+        if null_priority_tiles:
+            from geographic_scope import get_tile_priority
+            priority_groups: Dict[str, list] = {}
+            for tid in null_priority_tiles:
+                p = get_tile_priority(tid)
+                priority_groups.setdefault(p, []).append(tid)
+            for prio, tile_ids in priority_groups.items():
+                cur.execute("""
+                    UPDATE metadata SET priority = %s
+                    WHERE tile_id = ANY(%s) AND priority IS NULL
+                """, (prio, tile_ids))
+            logger.info("Backfilled priority for %d tiles (%s)",
+                        len(null_priority_tiles),
+                        {k: len(v) for k, v in priority_groups.items()})
 
     _conn.commit()
 
