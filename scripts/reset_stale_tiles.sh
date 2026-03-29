@@ -34,9 +34,19 @@ ts() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+# Load DATABASE_URL from .env if not already set
+if [ -z "${DATABASE_URL:-}" ] && [ -f "$PROJECT_DIR/.env" ]; then
+    DATABASE_URL=$(grep -E '^DATABASE_URL=' "$PROJECT_DIR/.env" | head -1 | cut -d'=' -f2-)
+    export DATABASE_URL
+fi
+
+if [ -z "${DATABASE_URL:-}" ]; then
+    ts "ERROR: DATABASE_URL not set and not found in $PROJECT_DIR/.env"
+    exit 1
+fi
+
 run_sql() {
-    docker compose -f "$PROJECT_DIR/docker-compose.prod.yml" exec -T postgres \
-        psql -U streetview -d streetview -t -A -c "$1"
+    psql "$DATABASE_URL" -t -A -c "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -44,7 +54,7 @@ run_sql() {
 # ---------------------------------------------------------------------------
 ts "Connecting to database..."
 if ! run_sql "SELECT 1;" >/dev/null 2>&1; then
-    ts "ERROR: Cannot connect to PostgreSQL. Is docker compose running?"
+    ts "ERROR: Cannot connect to PostgreSQL at $DATABASE_URL"
     exit 1
 fi
 ts "Connected."
