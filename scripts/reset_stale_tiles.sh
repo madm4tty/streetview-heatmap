@@ -114,19 +114,33 @@ for prio in high medium; do
     ts "  $prio: updated $ROW_COUNT rows"
 done
 
+ts ""
+ts "Shifting empty_tiles.checked_at back by ${SHIFT_DAYS} days..."
+EMPTY_COUNT=$(run_sql "
+    UPDATE empty_tiles
+    SET checked_at = checked_at - INTERVAL '${SHIFT_DAYS} days';
+    SELECT COUNT(*) FROM empty_tiles;
+" | tail -1)
+ts "  Updated $EMPTY_COUNT empty_tiles rows"
+
 # ---------------------------------------------------------------------------
 # Verify
 # ---------------------------------------------------------------------------
 ts ""
 ts "=== Freshness after reset ==="
 for prio in high medium; do
+    if [ "$prio" = "high" ]; then
+        THRESHOLD=30
+    else
+        THRESHOLD=60
+    fi
     STALE=$(run_sql "
         SELECT COUNT(*) FROM metadata
         WHERE priority = '$prio'
-          AND (last_checked <= NOW() - INTERVAL '30 days' OR last_checked IS NULL);
+          AND (last_checked <= NOW() - INTERVAL '${THRESHOLD} days' OR last_checked IS NULL);
     ")
     TOTAL=$(run_sql "SELECT COUNT(*) FROM metadata WHERE priority = '$prio';")
-    ts "  $prio: $STALE / $TOTAL rows now stale"
+    ts "  $prio: $STALE / $TOTAL rows now stale (threshold: ${THRESHOLD}d)"
 done
 
 ts ""

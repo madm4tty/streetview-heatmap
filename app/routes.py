@@ -133,11 +133,13 @@ def get_status():
 
         # Get freshness stats — one query returns {tile_id: oldest_check_datetime}
         freshness_stats = {}
+        freshness_error = None
         if database.is_postgresql():
             try:
                 freshness_stats = database.get_tile_freshness_stats()
             except Exception as e:
-                logger.warning("Failed to query tile freshness: %s", e)
+                logger.error("Failed to query tile freshness: %s", e)
+                freshness_error = str(e)
 
         # Build freshness thresholds per priority
         min_age_days = current_app.config.get('update', {}).get('min_age_for_recheck_days', 90)
@@ -288,6 +290,9 @@ def get_status():
                 "unique_tiles": unique_tiles
             }
         }
+
+        if freshness_error:
+            response["freshness_error"] = freshness_error
 
         return jsonify(response)
 

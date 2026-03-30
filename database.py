@@ -8,10 +8,13 @@ PostgreSQL requires PostGIS extension for spatial operations.
 """
 
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
+
+logger = logging.getLogger(__name__)
 
 # Coordinate precision: 6 decimal places (~0.1m accuracy)
 COORD_PRECISION = 6
@@ -150,6 +153,12 @@ def _init_postgresql() -> None:
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_lat_lon_pg ON metadata(lat, lon)
         """)
+        # Composite index for get_tile_freshness_stats() — allows PostgreSQL
+        # to satisfy GROUP BY tile_id + MIN(last_checked) via index-only scan.
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tile_last_checked
+            ON metadata(tile_id, last_checked)
+        """)
 
         # Create road_segments table for pre-computed road geometries
         cur.execute("""
@@ -191,6 +200,28 @@ def _init_postgresql() -> None:
                 FLOOR((lat - 49.9) / 0.05)::int
             WHERE tile_id IS NULL
         """)
+
+        # Backfill NULL priority on existing rows using geographic tile priority.
+        # This ensures the reset script and scheduler can filter by priority.
+        cur.execute("""
+            SELECT DISTINCT tile_id FROM metadata
+            WHERE priority IS NULL AND tile_id IS NOT NULL
+        """)
+        null_priority_tiles = [row[0] for row in cur.fetchall()]
+        if null_priority_tiles:
+            from geographic_scope import get_tile_priority
+            priority_groups: Dict[str, list] = {}
+            for tid in null_priority_tiles:
+                p = get_tile_priority(tid)
+                priority_groups.setdefault(p, []).append(tid)
+            for prio, tile_ids in priority_groups.items():
+                cur.execute("""
+                    UPDATE metadata SET priority = %s
+                    WHERE tile_id = ANY(%s) AND priority IS NULL
+                """, (prio, tile_ids))
+            logger.info("Backfilled priority for %d tiles (%s)",
+                        len(null_priority_tiles),
+                        {k: len(v) for k, v in priority_groups.items()})
 
     _conn.commit()
 
@@ -843,21 +874,31 @@ def get_tile_freshness_stats() -> Dict[str, Optional[datetime]]:
 
     try:
         with _conn.cursor() as cur:
+            # Use the composite index (tile_id, last_checked) for efficient
+            # GROUP BY + MIN via index-only scan on large tables.
             cur.execute("""
-                WITH tile_ages AS (
-                    SELECT tile_id, MIN(last_checked) AS oldest_check
-                    FROM metadata
-                    WHERE tile_id IS NOT NULL
-                    GROUP BY tile_id
-                    UNION ALL
-                    SELECT tile_id, checked_at AS oldest_check
-                    FROM empty_tiles
-                )
-                SELECT tile_id, MIN(oldest_check)
-                FROM tile_ages
+                SELECT tile_id, MIN(last_checked) AS oldest_check
+                FROM metadata
+                WHERE tile_id IS NOT NULL
                 GROUP BY tile_id
             """)
-            return {row[0]: row[1] for row in cur.fetchall()}
+            result = {row[0]: row[1] for row in cur.fetchall()}
+
+            # Merge empty_tiles — keep the older timestamp per tile
+            try:
+                cur.execute("SELECT tile_id, checked_at FROM empty_tiles")
+                for tile_id, checked_at in cur.fetchall():
+                    existing = result.get(tile_id)
+                    if existing is None or (checked_at is not None and checked_at < existing):
+                        result[tile_id] = checked_at
+            except Exception as e:
+                logger.warning("Failed to query empty_tiles for freshness: %s", e)
+                try:
+                    _conn.rollback()
+                except Exception:
+                    pass
+
+            return result
     except Exception as e:
         try:
             _conn.rollback()
