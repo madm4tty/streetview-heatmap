@@ -153,6 +153,12 @@ def _init_postgresql() -> None:
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_lat_lon_pg ON metadata(lat, lon)
         """)
+        # Composite index for get_tile_freshness_stats() — allows PostgreSQL
+        # to satisfy GROUP BY tile_id + MIN(last_checked) via index-only scan.
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tile_last_checked
+            ON metadata(tile_id, last_checked)
+        """)
 
         # Create road_segments table for pre-computed road geometries
         cur.execute("""
@@ -868,21 +874,31 @@ def get_tile_freshness_stats() -> Dict[str, Optional[datetime]]:
 
     try:
         with _conn.cursor() as cur:
+            # Use the composite index (tile_id, last_checked) for efficient
+            # GROUP BY + MIN via index-only scan on large tables.
             cur.execute("""
-                WITH tile_ages AS (
-                    SELECT tile_id, MIN(last_checked) AS oldest_check
-                    FROM metadata
-                    WHERE tile_id IS NOT NULL
-                    GROUP BY tile_id
-                    UNION ALL
-                    SELECT tile_id, checked_at AS oldest_check
-                    FROM empty_tiles
-                )
-                SELECT tile_id, MIN(oldest_check)
-                FROM tile_ages
+                SELECT tile_id, MIN(last_checked) AS oldest_check
+                FROM metadata
+                WHERE tile_id IS NOT NULL
                 GROUP BY tile_id
             """)
-            return {row[0]: row[1] for row in cur.fetchall()}
+            result = {row[0]: row[1] for row in cur.fetchall()}
+
+            # Merge empty_tiles — keep the older timestamp per tile
+            try:
+                cur.execute("SELECT tile_id, checked_at FROM empty_tiles")
+                for tile_id, checked_at in cur.fetchall():
+                    existing = result.get(tile_id)
+                    if existing is None or (checked_at is not None and checked_at < existing):
+                        result[tile_id] = checked_at
+            except Exception as e:
+                logger.warning("Failed to query empty_tiles for freshness: %s", e)
+                try:
+                    _conn.rollback()
+                except Exception:
+                    pass
+
+            return result
     except Exception as e:
         try:
             _conn.rollback()
