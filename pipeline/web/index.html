@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Street View Age</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@4.5.0/dist/pmtiles.js"></script>
+<style>
+  :root {
+    --panel-bg: rgba(255, 255, 255, 0.94);
+    --panel-fg: #1f2937;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --panel-bg: rgba(17, 24, 39, 0.94);
+      --panel-fg: #f3f4f6;
+      --muted: #9ca3af;
+      --border: #374151;
+    }
+  }
+  html, body { margin: 0; height: 100%; background: #f8fafc; }
+  body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .panel {
+    position: absolute; top: 12px; left: 12px; max-width: calc(100% - 24px);
+    background: var(--panel-bg); color: var(--panel-fg);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+  .panel h1 { font-size: 15px; margin: 0 0 8px; }
+  .legend { list-style: none; margin: 0; padding: 0; }
+  .legend li { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  .swatch { width: 22px; height: 4px; border-radius: 2px; flex: none; }
+  .swatch.dashed {
+    background: repeating-linear-gradient(90deg, #9ca3af 0 5px, transparent 5px 8px);
+  }
+  .panel label { display: flex; gap: 6px; align-items: center; margin-top: 8px; color: var(--muted); }
+  .maplibregl-popup-content { font: 13px/1.4 system-ui, sans-serif; color: #1f2937; }
+  .maplibregl-popup-content h2 { font-size: 14px; margin: 0 0 4px; }
+  .maplibregl-popup-content a { display: inline-block; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <h1>Street View imagery age</h1>
+  <ul class="legend" id="legend"></ul>
+  <label><input type="checkbox" id="show-none" checked> Show roads with no Google imagery</label>
+</div>
+<script>
+  // Age bands in months; matches AGE_COLORS in app/processing.py
+  const AGE_BANDS = [
+    { maxMonths: 6, color: "#22c55e", label: "Under 6 months" },
+    { maxMonths: 12, color: "#84cc16", label: "6–12 months" },
+    { maxMonths: 36, color: "#eab308", label: "1–3 years" },
+    { maxMonths: 60, color: "#f97316", label: "3–5 years" },
+    { maxMonths: 120, color: "#ef4444", label: "5–10 years" },
+    { maxMonths: Infinity, color: "#b91c1c", label: "Over 10 years" },
+  ];
+  const NO_IMAGERY_COLOR = "#9ca3af";
+
+  const params = new URLSearchParams(location.search);
+  const tilesUrl = params.get("tiles") || "leeds.pmtiles";
+
+  // Ages are worked out against today's date in the browser, so the
+  // tiles never need rebuilding just because time has passed.
+  const now = new Date();
+  const nowMonthIndex = now.getFullYear() * 12 + now.getMonth();
+  const ageMonths = ["-", nowMonthIndex, ["get", "m"]];
+
+  const colorExpr = ["step", ageMonths, AGE_BANDS[0].color];
+  AGE_BANDS.slice(0, -1).forEach((band, i) => colorExpr.push(band.maxMonths, AGE_BANDS[i + 1].color));
+
+  const MAJOR = ["motorway", "trunk", "primary", "secondary",
+                 "motorway_link", "trunk_link", "primary_link", "secondary_link"];
+  const isMajor = ["in", ["get", "hw"], ["literal", MAJOR]];
+  const widthExpr = ["interpolate", ["linear"], ["zoom"],
+    8, ["case", isMajor, 1.2, 0.5],
+    12, ["case", isMajor, 2.5, 1.2],
+    15, ["case", isMajor, 5, 3],
+    18, ["case", isMajor, 10, 6]];
+
+  document.getElementById("legend").innerHTML =
+    AGE_BANDS.map(b => `<li><span class="swatch" style="background:${b.color}"></span>${b.label}</li>`).join("") +
+    `<li><span class="swatch dashed"></span>No Google imagery</li>`;
+
+  const protocol = new pmtiles.Protocol();
+  maplibregl.addProtocol("pmtiles", protocol.tile);
+
+  const map = new maplibregl.Map({
+    container: "map",
+    style: "https://tiles.openfreemap.org/styles/positron",
+    center: [-1.549, 53.8],
+    zoom: 12,
+    hash: true,
+  });
+  map.addControl(new maplibregl.NavigationControl(), "bottom-right");
+
+  map.on("load", () => {
+    const firstLabel = map.getStyle().layers.find(l => l.type === "symbol")?.id;
+    map.addSource("roads", {
+      type: "vector",
+      url: `pmtiles://${new URL(tilesUrl, location.href)}`,
+      attribution: "Imagery dates: Google Street View",
+    });
+    map.addLayer({
+      id: "no-imagery",
+      type: "line",
+      source: "roads",
+      "source-layer": "roads",
+      filter: ["!=", ["get", "cov"], "google"],
+      paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [2, 1.5] },
+      layout: { "line-cap": "butt" },
+    }, firstLabel);
+    map.addLayer({
+      id: "imagery",
+      type: "line",
+      source: "roads",
+      "source-layer": "roads",
+      filter: ["==", ["get", "cov"], "google"],
+      paint: { "line-color": colorExpr, "line-width": widthExpr },
+      layout: { "line-cap": "round", "line-join": "round" },
+    }, firstLabel);
+  });
+
+  document.getElementById("show-none").addEventListener("change", e => {
+    map.setLayoutProperty("no-imagery", "visibility", e.target.checked ? "visible" : "none");
+  });
+
+  function describeAge(months) {
+    if (months < 1) return "this month";
+    const y = Math.floor(months / 12), m = months % 12;
+    const parts = [];
+    if (y) parts.push(`${y} year${y > 1 ? "s" : ""}`);
+    if (m) parts.push(`${m} month${m > 1 ? "s" : ""}`);
+    return parts.join(" ") + " ago";
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  map.on("click", e => {
+    const f = map.queryRenderedFeatures(e.point, { layers: ["imagery", "no-imagery"] })[0];
+    if (!f) return;
+    const p = f.properties;
+    const title = escapeHtml(p.name || p.hw.replace(/_/g, " "));
+    let body;
+    if (p.cov === "google") {
+      const [y, mo] = p.ym.split("-").map(Number);
+      const when = new Date(y, mo - 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+      body = `Captured ${when} (${describeAge(nowMonthIndex - p.m)})`;
+    } else {
+      body = p.cov === "other" ? "Only user-contributed photos here" : "No Street View imagery found";
+    }
+    const { lat, lng } = e.lngLat;
+    const svUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat.toFixed(6)},${lng.toFixed(6)}`;
+    new maplibregl.Popup()
+      .setLngLat(e.lngLat)
+      .setHTML(`<h2>${title}</h2><div>${body}</div><a href="${svUrl}" target="_blank" rel="noopener">Open in Street View →</a>`)
+      .addTo(map);
+  });
+
+  for (const layer of ["imagery", "no-imagery"]) {
+    map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
+  }
+</script>
+</body>
+</html>

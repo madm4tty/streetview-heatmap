@@ -63,3 +63,9 @@ results.csv
 # OS
 .DS_Store
 Thumbs.db
+
+# Virtual environments
+.venv/
+
+# Pipeline downloads and build outputs
+pipeline/data/
