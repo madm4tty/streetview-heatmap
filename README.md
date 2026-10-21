@@ -2,6 +2,26 @@
 
 This project visualizes the age of Google Street View imagery across UK road networks. It queries the Google Street View metadata API and colours OpenStreetMap road segments according to the capture date of nearby imagery.
 
+## Batch pipeline (pilot, proposed replacement)
+
+[`pipeline/`](pipeline/README.md) is a simpler way to build the map. It's a batch job that writes two static files: a PMTiles map file and one HTML page.
+It doesn't need Flask, the scheduler or PostgreSQL. Any web server that supports HTTP range requests, such as nginx or Caddy, can host the result.
+
+Piloted on Leeds:
+- 5,302 km of ways, 115k free metadata lookups, about 4.5 minutes;
+- a 7.9 MB map that stays smooth from city level down to street level.
+
+See [pipeline/README.md](pipeline/README.md) for setup and usage.
+
+The rest of this README describes the original Flask app. The 2026-10 review found problems with it that the pipeline avoids:
+- the metadata cache never hits, because OSM coordinates have 7 decimal places but the cache keys are rounded to 6;
+- freshly fetched dates aren't saved to `road_segments`;
+- "no imagery" points are re-queried on every run;
+- each gunicorn worker starts its own scheduler.
+
+> **Google terms:** storing Street View dates and showing them on a non-Google base map conflicts with
+> sections 3.2.3(a), (b), (c) and (e) of the Google Maps Platform Terms. Keep any deployment private or unlisted.
+
 ## Features
 
 - **Interactive Web Frontend**: Full-featured web interface with interactive map
