@@ -44,6 +44,32 @@ Some details:
 - Footpaths and other path-like ways use a 10 m search radius. Roads use 25 m.
 - Only imagery whose copyright says "© Google" counts as dated. Results come from `source=outdoor`, and user photospheres show as "no Google imagery".
 
+## Monthly refresh
+
+The cache keeps lookups forever, so rerunning `sample` never picks up new imagery. Use `refresh` instead:
+
+```bash
+.venv/bin/python -m pipeline.run download --area leeds   # latest OSM roads
+.venv/bin/python -m pipeline.run refresh  --area leeds
+.venv/bin/python -m pipeline.run tiles    --area leeds
+```
+
+How it works:
+1. It splits the area into 250 m grid cells.
+2. In each cell it re-checks one "sentinel" point: the middle of the longest stretch of the most important road there, preferring roads that already have Google imagery.
+3. Every road touching a cell whose sentinel changed is re-sampled. So are roads that are new or reshaped in OSM. Everything else keeps its previous dates.
+
+Lookups newer than `--max-age-days` (default 25) count as fresh, so a rerun in the same month resumes rather than starting again.
+The previous result is kept as `<area>-bisect.prev.pieces.jsonl`.
+
+Leeds trial (2026-10-21, forced with `--max-age-days 0` on the same day as the full run):
+- 16.6k calls in 2.3 minutes, about 14% of a full run;
+- 5% of cells were flagged as changed, all of them false alarms from nearest-panorama noise;
+- re-sampling them reproduced the original map exactly (100% match).
+
+**Limitation:** a new capture that skips a cell's sentinel road isn't detected until a later refresh or a full re-sample.
+A full re-sample once a year is a cheap safety net, at about 115k free calls for Leeds.
+
 ## Hosting
 
 Copy `pipeline/data/site/` (`index.html` plus `<area>.pmtiles`) to any static web server. nginx and Caddy both serve

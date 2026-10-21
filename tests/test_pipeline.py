@@ -7,6 +7,7 @@ import pytest
 from pipeline.cache import Lookup, MetadataCache, make_key
 from pipeline.export import agreement_by_length, month_index, piece_properties
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
+from pipeline.refresh import refresh
 from pipeline.roads import Segment, include_way
 from pipeline.sampler import Piece, merge_pieces, sample_bisect, sample_dense
 from pipeline.streetview import NO_COVERAGE, NON_GOOGLE, RateLimiter, classify
@@ -180,3 +181,65 @@ class TestRateLimiter:
 
         # 21 requests at 200/s need at least 20 intervals of 5 ms
         assert asyncio.run(run()) >= 0.095
+
+
+def _fixed_resolver(value_for_lat):
+    """Fake resolver whose value depends only on latitude; records calls."""
+    calls = []
+
+    async def resolve(keys):
+        calls.extend(keys)
+        return {k: value_for_lat(k[0] / 1e6) for k in keys}
+
+    return resolve, calls
+
+
+class TestRefresh:
+    # Two parallel 1 km roads about 1.1 km apart, so in different grid cells
+    ROAD_A = (START, END)
+    ROAD_B = ((53.81, -1.55), (53.81, -1.535))
+
+    def _previous_run(self, segments):
+        resolve, _ = _fixed_resolver(lambda lat: "2019-08")
+        return asyncio.run(sample_bisect(segments, resolve))
+
+    def test_nothing_changed_only_checks_sentinels(self):
+        segments = [_road("a", self.ROAD_A), _road("b", self.ROAD_B)]
+        old = self._previous_run(segments)
+        resolve, calls = _fixed_resolver(lambda lat: "2019-08")
+        result = asyncio.run(refresh(segments, old, resolve))
+        assert result.changed_cells == set() and result.resampled == 0
+        assert len(calls) == result.sentinels
+        assert result.pieces == old
+
+    def test_new_capture_resamples_only_that_area(self):
+        segments = [_road("a", self.ROAD_A), _road("b", self.ROAD_B)]
+        old = self._previous_run(segments)
+        # Road A (lat 53.80) was re-driven; road B (53.81) was not
+        resolve, calls = _fixed_resolver(lambda lat: "2026-09" if lat < 53.805 else "2019-08")
+        result = asyncio.run(refresh(segments, old, resolve))
+        values = {p.segment_id: p.value for p in result.pieces}
+        assert values == {"a": "2026-09", "b": "2019-08"}
+        assert result.resampled == 1
+        assert all(k[0] < 53_805_000 for k in calls[result.sentinels:])
+
+    def test_new_osm_road_is_sampled(self):
+        old = self._previous_run([_road("a", self.ROAD_A)])
+        segments = [_road("a", self.ROAD_A), _road("b", self.ROAD_B)]
+        resolve, _ = _fixed_resolver(lambda lat: "2019-08")
+        result = asyncio.run(refresh(segments, old, resolve))
+        assert result.new_or_reshaped == 1
+        assert {p.segment_id for p in result.pieces} == {"a", "b"}
+
+    def test_removed_osm_road_is_dropped(self):
+        old = self._previous_run([_road("a", self.ROAD_A), _road("b", self.ROAD_B)])
+        resolve, _ = _fixed_resolver(lambda lat: "2019-08")
+        result = asyncio.run(refresh([_road("a", self.ROAD_A)], old, resolve))
+        assert {p.segment_id for p in result.pieces} == {"a"}
+
+    def test_cache_ignores_entries_older_than_cutoff(self, tmp_path):
+        cache = MetadataCache(str(tmp_path / "c.sqlite"))
+        key = make_key(53.8, -1.55, 25)
+        cache.put_many([(key, Lookup("ZERO_RESULTS"))])
+        assert cache.get_many([key], fresh_after="2000-01-01 00:00:00") != {}
+        assert cache.get_many([key], fresh_after="2999-01-01 00:00:00") == {}
