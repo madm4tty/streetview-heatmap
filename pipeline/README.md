@@ -1,0 +1,51 @@
+# Batch pipeline (pilot)
+
+Builds a static Street View age map: OSM roads → Street View metadata → PMTiles → one HTML page.
+It doesn't need Flask, the scheduler or PostgreSQL. The output is two files that any web server can host.
+
+## Setup (build machine only)
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install osmium aiohttp certifi python-dotenv pytest pytest-asyncio
+brew install tippecanoe          # only needed for the `tiles` step
+```
+
+The API key comes from `GOOGLE_MAPS_API_KEY` (or `GMAPS_APIKEY`) in the environment or in `.env`.
+The key needs the **Street View Static API** enabled. Metadata lookups are free and don't use quota.
+
+## Steps
+
+```bash
+.venv/bin/python -m pipeline.run download --area leeds        # ~54 MB West Yorkshire extract
+.venv/bin/python -m pipeline.run estimate --area leeds        # road km and call estimates, no API calls
+
+# Accuracy check on a small area: dense 20 m ground truth vs bisection
+.venv/bin/python -m pipeline.run sample  --area leeds-centre --mode dense --max-calls 20000
+.venv/bin/python -m pipeline.run sample  --area leeds-centre --mode bisect
+.venv/bin/python -m pipeline.run compare --area leeds-centre
+
+# Full area and map
+.venv/bin/python -m pipeline.run sample --area leeds --mode bisect --max-calls 150000
+.venv/bin/python -m pipeline.run tiles  --area leeds --mode bisect
+.venv/bin/python -m pipeline.serve                              # http://localhost:8000/
+```
+
+Every lookup is cached in `pipeline/data/metadata_cache.sqlite`, including "no imagery" answers.
+An interrupted run picks up where it stopped.
+
+## How sampling works
+
+- **dense**: one lookup at the centre of every 20 m stretch. This is slow but serves as ground truth.
+- **bisect**: look up both ends of each stretch, up to 400 m long. If they agree, the whole stretch gets that value. If not, look up the middle and repeat, down to 30 m.
+
+Some details:
+- Lookups are inset 10 m from each end of a way, so they don't snap to the crossing road at a junction.
+- Footpaths and other path-like ways use a 10 m search radius. Roads use 25 m.
+- Only imagery whose copyright says "© Google" counts as dated. Results come from `source=outdoor`, and user photospheres show as "no Google imagery".
+
+## Hosting
+
+Copy `pipeline/data/site/` (`index.html` plus `<area>.pmtiles`) to any static web server. nginx and Caddy both serve
+the HTTP range requests that PMTiles needs without extra configuration. Python's built-in `http.server` does not, which is why
+`pipeline.serve` exists.
