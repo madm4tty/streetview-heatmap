@@ -82,10 +82,17 @@ class StreetViewClient:
         self.api_calls = 0
         self.cache_hits = 0
 
-    async def lookup_many(self, keys: List[Key]) -> Dict[Key, Lookup]:
-        """Return a Lookup for every key, querying the API only for misses."""
+    async def lookup_many(self, keys: List[Key],
+                          fresh_after: Optional[str] = None) -> Dict[Key, Lookup]:
+        """Return a Lookup for every key, querying the API only for misses.
+
+        Args:
+            keys: Points to look up
+            fresh_after: Treat cached entries older than this UTC timestamp
+                ("YYYY-MM-DD HH:MM:SS") as misses; used by refresh runs.
+        """
         keys = list(dict.fromkeys(keys))
-        results = self.cache.get_many(keys)
+        results = self.cache.get_many(keys, fresh_after=fresh_after)
         self.cache_hits += len(results)
         missing = [k for k in keys if k not in results]
         if not missing:
