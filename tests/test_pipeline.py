@@ -292,6 +292,7 @@ def _site(tmp_path, area="leeds"):
 
 class TestPublish:
     NOW = datetime(2026, 10, 22, 10, 45, 30, tzinfo=timezone.utc)
+    PREFIX = "k7f3q9x2v8m1w4z6"
 
     def test_point_page_at_rewrites_default(self):
         html = publish.point_page_at(PAGE, "tiles/leeds-20261022-104530.pmtiles")
@@ -301,38 +302,57 @@ class TestPublish:
         with pytest.raises(ValueError):
             publish.point_page_at("<html></html>", "x.pmtiles")
 
-    def test_shipped_page_has_marker(self):
+    def test_shipped_page_has_marker_and_noindex(self):
         path = os.path.join(os.path.dirname(publish.__file__), "web", "index.html")
         with open(path, encoding="utf-8") as f:
-            assert "tiles/x.pmtiles" in publish.point_page_at(f.read(), "tiles/x.pmtiles")
+            html = f.read()
+        assert "tiles/x.pmtiles" in publish.point_page_at(html, "tiles/x.pmtiles")
+        assert '<meta name="robots" content="noindex, nofollow">' in html
 
-    def test_uploads_tiles_before_page(self, tmp_path):
+    @pytest.mark.parametrize("prefix", ["", "short", "has/slash-1234567890", "has space 1234567890"])
+    def test_site_prefix_rejects_weak_or_unsafe(self, monkeypatch, prefix):
+        monkeypatch.setenv("R2_SITE_PREFIX", prefix)
+        with pytest.raises(SystemExit):
+            publish.site_prefix()
+
+    def test_site_prefix_accepts_random_string(self, monkeypatch):
+        monkeypatch.setenv("R2_SITE_PREFIX", self.PREFIX)
+        assert publish.site_prefix() == self.PREFIX
+
+    def test_uploads_tiles_before_page_under_prefix(self, tmp_path):
         client = FakeR2()
-        key = publish.publish_site(client, "site", "leeds", _site(tmp_path), now=self.NOW)
-        assert key == "tiles/leeds-20261022-104530.pmtiles"
-        assert client.calls == [("upload", key), ("put", "index.html")]
-        assert client.objects[key]["CacheControl"] == publish.IMMUTABLE
-        page = client.objects["index.html"]
+        page_key = publish.publish_site(client, "site", self.PREFIX, "leeds", _site(tmp_path),
+                                        now=self.NOW)
+        tiles_key = f"{self.PREFIX}/tiles/leeds-20261022-104530.pmtiles"
+        assert page_key == f"{self.PREFIX}/index.html"
+        assert client.calls == [("upload", tiles_key), ("put", page_key)]
+        assert client.objects[tiles_key]["CacheControl"] == publish.IMMUTABLE
+        page = client.objects[page_key]
         assert page["CacheControl"] == "no-cache"
-        assert f'"{key}"'.encode() in page["Body"]
+        # The page refers to its tiles relative to itself, without the prefix
+        assert b'"tiles/leeds-20261022-104530.pmtiles"' in page["Body"]
+        assert self.PREFIX.encode() not in page["Body"]
 
     def test_keeps_two_newest_versions_of_this_area_only(self, tmp_path):
+        p = self.PREFIX
         client = FakeR2({k: {"Body": b""} for k in (
-            "tiles/leeds-20260801-000000.pmtiles",
-            "tiles/leeds-20260901-000000.pmtiles",
-            "tiles/leeds-centre-20260101-000000.pmtiles",
+            f"{p}/tiles/leeds-20260801-000000.pmtiles",
+            f"{p}/tiles/leeds-20260901-000000.pmtiles",
+            f"{p}/tiles/leeds-centre-20260101-000000.pmtiles",
+            "otherprefix12345678/tiles/leeds-20260101-000000.pmtiles",
         )})
-        publish.publish_site(client, "site", "leeds", _site(tmp_path), now=self.NOW)
-        assert sorted(k for k in client.objects if k.startswith("tiles/")) == [
-            "tiles/leeds-20260901-000000.pmtiles",
-            "tiles/leeds-20261022-104530.pmtiles",
-            "tiles/leeds-centre-20260101-000000.pmtiles",
+        publish.publish_site(client, "site", p, "leeds", _site(tmp_path), now=self.NOW)
+        assert sorted(k for k in client.objects if "/tiles/" in k) == [
+            f"{p}/tiles/leeds-20260901-000000.pmtiles",
+            f"{p}/tiles/leeds-20261022-104530.pmtiles",
+            f"{p}/tiles/leeds-centre-20260101-000000.pmtiles",
+            "otherprefix12345678/tiles/leeds-20260101-000000.pmtiles",
         ]
 
     def test_missing_build_fails_before_uploading(self, tmp_path):
         client = FakeR2()
         with pytest.raises(SystemExit):
-            publish.publish_site(client, "site", "leeds", str(tmp_path))
+            publish.publish_site(client, "site", self.PREFIX, "leeds", str(tmp_path))
         assert client.calls == []
 
 

@@ -3,7 +3,9 @@
 R2 speaks the S3 API, so boto3 talks to it with an R2 endpoint URL.
 
 Two buckets:
-- the site bucket (behind Cloudflare Access) holds index.html and tiles/<area>-<stamp>.pmtiles;
+- the site bucket is public on a custom domain. Everything goes under a secret
+  folder (R2_SITE_PREFIX): <prefix>/index.html and <prefix>/tiles/<area>-<stamp>.pmtiles.
+  R2 never lists a bucket, so only people with the link can find the map;
 - the state bucket (private, no custom domain) holds the lookup cache and the last
   sampling result, so the monthly job on a fresh machine can `refresh` instead of
   starting again.
@@ -32,6 +34,9 @@ NO_CACHE = "no-cache"
 
 DEFAULT_TILES_RE = re.compile(r'(const DEFAULT_TILES = )"[^"]*";')
 
+# Long and random enough that nobody guesses it, and safe in a URL path
+SITE_PREFIX_RE = re.compile(r"[A-Za-z0-9_-]{16,}")
+
 
 def site_bucket() -> str:
     return os.environ.get("R2_BUCKET", "streetview-heatmap")
@@ -39,6 +44,15 @@ def site_bucket() -> str:
 
 def state_bucket() -> str:
     return os.environ.get("R2_STATE_BUCKET", "streetview-heatmap-state")
+
+
+def site_prefix() -> str:
+    """The secret folder the site is published under, from R2_SITE_PREFIX."""
+    prefix = os.environ.get("R2_SITE_PREFIX", "")
+    if not SITE_PREFIX_RE.fullmatch(prefix):
+        raise SystemExit("Set R2_SITE_PREFIX to a random string of at least 16 letters, digits, "
+                         "'-' or '_'. It becomes the secret part of the map's link.")
+    return prefix
 
 
 def r2_client(bucket: str):
@@ -82,11 +96,12 @@ def point_page_at(html: str, tiles_path: str) -> str:
     return new_html
 
 
-def prune_tiles(client, bucket: str, area: str, keep: int = KEEP_VERSIONS) -> List[str]:
+def prune_tiles(client, bucket: str, prefix: str, area: str,
+                keep: int = KEEP_VERSIONS) -> List[str]:
     """Delete all but the newest `keep` tiles files for `area`. Returns the deleted keys."""
     # Match the exact area, so pruning "leeds" never touches "leeds-centre"
-    pattern = re.compile(rf"tiles/{re.escape(area)}-\d{{8}}-\d{{6}}\.pmtiles$")
-    resp = client.list_objects_v2(Bucket=bucket, Prefix=f"tiles/{area}-")
+    pattern = re.compile(rf"{re.escape(prefix)}/tiles/{re.escape(area)}-\d{{8}}-\d{{6}}\.pmtiles$")
+    resp = client.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/tiles/{area}-")
     keys = sorted(o["Key"] for o in resp.get("Contents", []) if pattern.match(o["Key"]))
     old = keys[:-keep] if keep > 0 else keys
     for key in old:
@@ -95,29 +110,35 @@ def prune_tiles(client, bucket: str, area: str, keep: int = KEEP_VERSIONS) -> Li
     return old
 
 
-def publish_site(client, bucket: str, area: str, site_dir: str,
+def publish_site(client, bucket: str, prefix: str, area: str, site_dir: str,
                  now: Optional[datetime] = None) -> str:
-    """Upload the area's tiles under a new name, then an index.html pointing at them."""
+    """Upload the area's tiles under a new name, then an index.html pointing at them.
+
+    Returns the key of the uploaded page.
+    """
     pmtiles = os.path.join(site_dir, f"{area}.pmtiles")
     index = os.path.join(site_dir, "index.html")
     for path in (pmtiles, index):
         if not os.path.exists(path):
             raise SystemExit(f"{path} not found. Run: python3 -m pipeline.run tiles --area {area}")
 
-    key = tiles_key(area, now or datetime.now(timezone.utc))
+    # Relative to the page, so the page itself never needs to know the prefix
+    tiles = tiles_key(area, now or datetime.now(timezone.utc))
+    tiles_object = f"{prefix}/{tiles}"
     # Tiles first, so the live page never points at a file that isn't there yet
-    logger.info("Uploading %s -> %s/%s", pmtiles, bucket, key)
-    client.upload_file(pmtiles, bucket, key, ExtraArgs={
+    logger.info("Uploading %s -> %s/%s", pmtiles, bucket, tiles_object)
+    client.upload_file(pmtiles, bucket, tiles_object, ExtraArgs={
         "ContentType": "application/octet-stream", "CacheControl": IMMUTABLE})
 
     with open(index, encoding="utf-8") as f:
-        page = point_page_at(f.read(), key)
-    client.put_object(Bucket=bucket, Key="index.html", Body=page.encode("utf-8"),
+        page = point_page_at(f.read(), tiles)
+    page_object = f"{prefix}/index.html"
+    client.put_object(Bucket=bucket, Key=page_object, Body=page.encode("utf-8"),
                       ContentType="text/html; charset=utf-8", CacheControl=NO_CACHE)
-    logger.info("Uploaded index.html")
+    logger.info("Uploaded %s", page_object)
 
-    prune_tiles(client, bucket, area)
-    return key
+    prune_tiles(client, bucket, prefix, area)
+    return page_object
 
 
 def _is_missing(exc: Exception) -> bool:

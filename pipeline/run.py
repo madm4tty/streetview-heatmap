@@ -216,9 +216,9 @@ def state_paths(area: str) -> List[str]:
 
 
 def cmd_publish(args) -> None:
-    bucket = publish.site_bucket()
-    key = publish.publish_site(publish.r2_client(bucket), bucket, args.area, SITE_DIR)
-    print(f"\nPublished {key} and index.html to the {bucket} bucket")
+    bucket, prefix = publish.site_bucket(), publish.site_prefix()
+    page = publish.publish_site(publish.r2_client(bucket), bucket, prefix, args.area, SITE_DIR)
+    print(f"\nPublished {page} to the {bucket} bucket")
 
 
 def cmd_pull_state(args) -> None:
