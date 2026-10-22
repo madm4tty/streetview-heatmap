@@ -1,0 +1,6 @@
+# Batch pipeline only. The Flask app uses ../requirements.txt
+osmium>=4.0
+aiohttp>=3.9
+certifi>=2023.0.0
+python-dotenv>=1.0.0
+boto3>=1.34

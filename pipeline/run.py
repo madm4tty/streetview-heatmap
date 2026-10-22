@@ -7,6 +7,9 @@ Usage:
     python3 -m pipeline.run compare  --area leeds-centre
     python3 -m pipeline.run tiles    --area leeds --mode bisect
     python3 -m pipeline.run refresh  --area leeds          # monthly update
+    python3 -m pipeline.run publish  --area leeds          # upload the site to R2
+    python3 -m pipeline.run pull-state --area leeds        # restore cache from R2
+    python3 -m pipeline.run push-state --area leeds        # save cache to R2
 """
 
 import argparse
@@ -24,7 +27,7 @@ from typing import Dict, List
 
 import certifi
 
-from pipeline import areas
+from pipeline import areas, publish
 from pipeline.cache import Key, MetadataCache
 from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces,
                              save_pieces, write_geojsonseq)
@@ -49,12 +52,15 @@ def pieces_path(area: str, mode: str) -> str:
     return os.path.join(DATA_DIR, f"{area}-{mode}.pieces.jsonl")
 
 
-def get_api_key() -> str:
+def load_env() -> None:
     try:
         from dotenv import load_dotenv
         load_dotenv(os.path.join(os.path.dirname(PIPELINE_DIR), ".env"))
     except ImportError:
         pass
+
+
+def get_api_key() -> str:
     key = os.environ.get("GOOGLE_MAPS_API_KEY") or os.environ.get("GMAPS_APIKEY")
     if not key:
         raise SystemExit("Set GOOGLE_MAPS_API_KEY (or GMAPS_APIKEY) in the environment or .env")
@@ -205,12 +211,36 @@ def cmd_tiles(args) -> None:
     print("Preview with: python3 -m pipeline.serve")
 
 
+def state_paths(area: str) -> List[str]:
+    return [CACHE_PATH, pieces_path(area, "bisect")]
+
+
+def cmd_publish(args) -> None:
+    bucket, prefix = publish.site_bucket(), publish.site_prefix()
+    page = publish.publish_site(publish.r2_client(bucket), bucket, prefix, args.area, SITE_DIR)
+    print(f"\nPublished {page} to the {bucket} bucket")
+
+
+def cmd_pull_state(args) -> None:
+    bucket = publish.state_bucket()
+    written = publish.pull_state(publish.r2_client(bucket), bucket, state_paths(args.area),
+                                 force=args.force)
+    print(f"\nRestored {len(written)} file(s) from the {bucket} bucket")
+
+
+def cmd_push_state(args) -> None:
+    bucket = publish.state_bucket()
+    uploaded = publish.push_state(publish.r2_client(bucket), bucket, state_paths(args.area))
+    print(f"\nSaved {len(uploaded)} file(s) to the {bucket} bucket")
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="python3 -m pipeline.run", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("download", "estimate", "sample", "compare", "tiles", "refresh"):
+    for name in ("download", "estimate", "sample", "compare", "tiles", "refresh",
+                 "publish", "pull-state", "push-state"):
         p = sub.add_parser(name)
         p.add_argument("--area", required=True, choices=sorted(areas.AREAS))
         if name in ("sample", "tiles"):
@@ -233,11 +263,17 @@ def main(argv=None) -> None:
                            help="Max API requests per second (Google allows 500; default 300)")
             p.add_argument("--max-calls", type=int, default=None,
                            help="Abort before exceeding this many API calls")
+        if name == "pull-state":
+            p.add_argument("--force", action="store_true",
+                           help="Replace local files with the copies in R2")
 
     args = parser.parse_args(argv)
+    load_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     {"download": cmd_download, "estimate": cmd_estimate, "sample": cmd_sample,
-     "compare": cmd_compare, "tiles": cmd_tiles, "refresh": cmd_refresh}[args.command](args)
+     "compare": cmd_compare, "tiles": cmd_tiles, "refresh": cmd_refresh,
+     "publish": cmd_publish, "pull-state": cmd_pull_state,
+     "push-state": cmd_push_state}[args.command](args)
 
 
 if __name__ == "__main__":

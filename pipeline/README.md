@@ -7,7 +7,7 @@ It doesn't need Flask, the scheduler or PostgreSQL. The output is two files that
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install osmium aiohttp certifi python-dotenv pytest pytest-asyncio
+.venv/bin/pip install -r pipeline/requirements.txt pytest pytest-asyncio
 brew install tippecanoe          # only needed for the `tiles` step
 ```
 
@@ -75,3 +75,48 @@ A full re-sample once a year is a cheap safety net, at about 115k free calls for
 Copy `pipeline/data/site/` (`index.html` plus `<area>.pmtiles`) to any static web server. nginx and Caddy both serve
 the HTTP range requests that PMTiles needs without extra configuration. Python's built-in `http.server` does not, which is why
 `pipeline.serve` exists.
+
+### Cloudflare R2 (current setup)
+
+The map is shared by unlisted link: `https://map.m4tty.co.uk/<R2_SITE_PREFIX>/index.html`. The bucket is public on
+that custom domain, but everything lives under a secret folder. R2 never lists a bucket's contents, so without the
+link there's nothing to find. Don't rely on the subdomain staying unknown: certificate transparency logs publish it.
+
+Anyone with the link can pass it on. To revoke it, set a new `R2_SITE_PREFIX`, publish, share the new link,
+then delete the old folder in the R2 dashboard (it stays public until you do).
+
+```bash
+.venv/bin/python -m pipeline.run publish --area leeds
+```
+
+`publish` uploads the tiles as `<prefix>/tiles/<area>-<YYYYMMDD-HHMMSS>.pmtiles`, then a `<prefix>/index.html` that
+points at them,
+then deletes all but the two newest tiles files for that area. Each publish gets a new tiles name, so browsers can
+cache tiles forever without ever showing an old map. `index.html` is sent with `Cache-Control: no-cache`.
+
+A second, private bucket holds the state the monthly job needs: the lookup cache and the last sampling result.
+
+```bash
+.venv/bin/python -m pipeline.run pull-state --area leeds   # skips files you already have; --force replaces them
+.venv/bin/python -m pipeline.run push-state --area leeds
+```
+
+Settings, from the environment or `.env`:
+
+| Variable | Meaning |
+|---|---|
+| `R2_ACCOUNT_ID` | Cloudflare account ID (the part before `.r2.cloudflarestorage.com`) |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | R2 API token with Object Read & Write on both buckets |
+| `R2_SITE_PREFIX` | secret folder for the site: 16+ random letters, digits, `-` or `_` |
+| `R2_BUCKET` | site bucket, default `streetview-heatmap` |
+| `R2_STATE_BUCKET` | state bucket, default `streetview-heatmap-state` |
+
+**Never connect a custom domain to the state bucket.** Connecting a domain makes a bucket public, and the state
+bucket holds the whole lookup cache. Never upload anything to the site bucket outside the secret folder.
+
+### Monthly build (GitHub Actions)
+
+`.github/workflows/build-map.yml` runs at 04:23 UTC on the 2nd of each month, and from **Actions → Build map → Run
+workflow**. It runs `pull-state`, `download`, then `refresh` (or a full `sample` if there's no previous result),
+`push-state`, `tiles` and `publish`. It needs these repository secrets: `GOOGLE_MAPS_API_KEY`, `R2_ACCOUNT_ID`,
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_SITE_PREFIX`.

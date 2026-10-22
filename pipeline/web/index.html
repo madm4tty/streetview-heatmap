@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Shared by unlisted link only: keep it out of search engines -->
+<meta name="robots" content="noindex, nofollow">
 <title>Street View Age</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
@@ -64,7 +66,9 @@
   const NO_IMAGERY_COLOR = "#9ca3af";
 
   const params = new URLSearchParams(location.search);
-  const tilesUrl = params.get("tiles") || "leeds.pmtiles";
+  // `pipeline.run publish` rewrites this to the versioned file it uploads
+  const DEFAULT_TILES = "leeds.pmtiles";
+  const tilesUrl = params.get("tiles") || DEFAULT_TILES;
 
   // Ages are worked out against today's date in the browser, so the
   // tiles never need rebuilding just because time has passed.
