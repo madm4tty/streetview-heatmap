@@ -63,7 +63,9 @@ def build_pmtiles(geojsonseq_path: str, pmtiles_path: str) -> None:
     cmd = [
         "tippecanoe", "-o", pmtiles_path, "--force",
         "-l", "roads",
-        "-Z", "8", "-z", "15",
+        # Zoom 14 detail is enough: the map scales it up for closer zooms,
+        # and it roughly halves the file compared with zoom 15
+        "-Z", "6", "-z", "14",
         "--drop-densest-as-needed",
         "--extend-zooms-if-still-dropping",
         geojsonseq_path,

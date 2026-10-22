@@ -54,6 +54,15 @@ class Segment:
     def is_path(self) -> bool:
         return self.highway in PATH_HIGHWAYS
 
+    @property
+    def tight_radius(self) -> bool:
+        """Search close to the way, so it doesn't borrow a nearby road's imagery.
+
+        Paths, and service roads (driveways, car parks), which often run right
+        beside a road that has imagery of its own.
+        """
+        return self.is_path or self.highway == "service"
+
 
 def include_way(tags: Dict[str, str]) -> bool:
     """Return True if a highway way should be sampled."""

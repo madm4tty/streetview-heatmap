@@ -1,13 +1,13 @@
 name: Build map
 
-# Monthly: restore state from R2, fetch the latest OSM roads, re-check Street View,
-# rebuild the tiles and publish them. Can also be started by hand from the Actions tab.
+# Monthly UK build, also startable from the Actions tab:
+#   prepare  download the UK extract once and cut it down to highways
+#   shard    sample (first run) or refresh each shard in turn, saving state to R2
+#   publish  merge the shard tiles into one UK file and upload it
+# A shard that hits its time limit saves its progress and fails, which skips
+# publish and leaves the current map up; running the workflow again resumes it.
 on:
   workflow_dispatch:
-    inputs:
-      area:
-        description: Area to build (see pipeline/areas.py)
-        default: leeds
   schedule:
     - cron: "23 4 2 * *"   # 04:23 UTC on the 2nd of each month
 
@@ -16,18 +16,55 @@ concurrency:
   group: build-map
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: write   # keep-alive below
+
+env:
+  TIPPECANOE_VERSION: "2.79.0"
+
 jobs:
-  build:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
+    steps:
+      # GitHub disables scheduled workflows in public repos after 60 days without
+      # commits. Re-enabling it on each run keeps the monthly build going.
+      - name: Keep the schedule alive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/build-map.yml/enable"
+
+      - name: Download the UK extract and keep only highways
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
+          curl -fsSL -o uk-full.osm.pbf https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf
+          # Keeps highway ways and the nodes they use; the file name is what the pipeline expects
+          osmium tags-filter uk-full.osm.pbf w/highway -o united-kingdom-latest.osm.pbf
+          ls -lh uk-full.osm.pbf united-kingdom-latest.osm.pbf
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uk-highways
+          path: united-kingdom-latest.osm.pbf
+          retention-days: 3
+
+  shard:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      # One at a time: they share Google's 500 requests/s limit
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        shard: [uk-1, uk-2, uk-3, uk-4, uk-5, uk-6, uk-7, uk-8, uk-9, uk-10]
     env:
-      AREA: ${{ inputs.area || 'leeds' }}
+      AREA: ${{ matrix.shard }}
       GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_SITE_PREFIX: ${{ secrets.R2_SITE_PREFIX }}
-      TIPPECANOE_VERSION: "2.79.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -41,8 +78,8 @@ jobs:
         id: tippecanoe
         uses: actions/cache@v4
         with:
-          path: ~/.local/bin/tippecanoe
-          key: tippecanoe-${{ env.TIPPECANOE_VERSION }}-${{ runner.os }}
+          path: ~/.local/bin
+          key: tippecanoe-${{ env.TIPPECANOE_VERSION }}-with-tile-join-${{ runner.os }}
 
       - name: Build tippecanoe
         if: steps.tippecanoe.outputs.cache-hit != 'true'
@@ -50,25 +87,30 @@ jobs:
           git clone --depth 1 --branch "$TIPPECANOE_VERSION" https://github.com/felt/tippecanoe.git /tmp/tippecanoe
           make -C /tmp/tippecanoe -j"$(nproc)"
           mkdir -p ~/.local/bin
-          cp /tmp/tippecanoe/tippecanoe ~/.local/bin/
+          cp /tmp/tippecanoe/tippecanoe /tmp/tippecanoe/tile-join ~/.local/bin/
 
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: uk-highways
+          path: pipeline/data
 
       - name: Restore cache and last result from R2
         id: pull
         run: python3 -m pipeline.run pull-state --area "$AREA"
 
-      - run: python3 -m pipeline.run download --area "$AREA"
-
+      # Stops starting new lookups after 300 minutes, leaving time to save state
       - name: Sample (first run) or refresh
         run: |
+          OPTS="--area $AREA --rate 400 --concurrency 100 --max-minutes 300"
           if [ -f "pipeline/data/${AREA}-bisect.pieces.jsonl" ]; then
-            python3 -m pipeline.run refresh --area "$AREA"
+            python3 -m pipeline.run refresh $OPTS
           else
-            python3 -m pipeline.run sample --area "$AREA" --mode bisect
+            python3 -m pipeline.run sample --mode bisect $OPTS
           fi
 
-      # Runs even if sampling failed, so a long run's lookups aren't lost.
+      # Runs even if sampling stopped early, so lookups made so far aren't lost.
       # Never runs if the restore failed, or it would overwrite good state with nothing.
       - name: Save cache and result to R2
         if: always() && steps.pull.outcome == 'success'
@@ -76,4 +118,48 @@ jobs:
 
       - run: python3 -m pipeline.run tiles --area "$AREA"
 
-      - run: python3 -m pipeline.run publish --area "$AREA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tiles-${{ matrix.shard }}
+          path: pipeline/data/site/${{ matrix.shard }}.pmtiles
+          retention-days: 3
+
+  publish:
+    needs: shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_SITE_PREFIX: ${{ secrets.R2_SITE_PREFIX }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python3 -m pip install -r pipeline/requirements.txt
+
+      - name: Restore tippecanoe build
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.local/bin
+          key: tippecanoe-${{ env.TIPPECANOE_VERSION }}-with-tile-join-${{ runner.os }}
+          fail-on-cache-miss: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tiles-*
+          path: shard-tiles
+          merge-multiple: true
+
+      - name: Merge shard tiles
+        run: |
+          mkdir -p pipeline/data/site
+          ~/.local/bin/tile-join -o pipeline/data/site/uk.pmtiles --force --no-tile-size-limit shard-tiles/*.pmtiles
+          cp pipeline/web/index.html pipeline/data/site/
+          ls -lh shard-tiles pipeline/data/site
+
+      - run: python3 -m pipeline.run publish --area uk

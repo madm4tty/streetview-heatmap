@@ -39,7 +39,7 @@ class Piece:
 
 
 def radius_for(segment: Segment) -> int:
-    return PATH_RADIUS_M if segment.is_path else ROAD_RADIUS_M
+    return PATH_RADIUS_M if segment.tight_radius else ROAD_RADIUS_M
 
 
 def key_at(segment: Segment, dist: float) -> Key:

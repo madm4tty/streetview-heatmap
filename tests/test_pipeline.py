@@ -7,15 +7,16 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pipeline import measure, publish
+from pipeline import areas, measure, publish, shards
 from pipeline.cache import Lookup, MetadataCache, make_key
 from pipeline.export import agreement_by_length, month_index, piece_properties
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
 from pipeline.refresh import refresh
 from pipeline.roads import Segment, include_way
-from pipeline.sampler import (Piece, merge_pieces, min_bisect_lookups, sample_bisect,
-                              sample_dense)
-from pipeline.streetview import NO_COVERAGE, NON_GOOGLE, RateLimiter, classify
+from pipeline.sampler import (PATH_RADIUS_M, ROAD_RADIUS_M, Piece, merge_pieces,
+                              min_bisect_lookups, radius_for, sample_bisect, sample_dense)
+from pipeline.streetview import (NO_COVERAGE, NON_GOOGLE, BudgetExceeded, RateLimiter,
+                                 StreetViewClient, classify)
 
 # A straight east-west road in Leeds, roughly 1 km long
 START = (53.8, -1.55)
@@ -267,7 +268,8 @@ class FakeR2:
         self.objects[Key] = {"Body": Body, **kwargs}
 
     def list_objects_v2(self, Bucket, Prefix):
-        return {"Contents": [{"Key": k} for k in self.objects if k.startswith(Prefix)]}
+        return {"Contents": [{"Key": k, "Size": len(v["Body"])}
+                             for k, v in self.objects.items() if k.startswith(Prefix)]}
 
     def delete_object(self, Bucket, Key):
         self.calls.append(("delete", Key))
@@ -433,3 +435,88 @@ class TestMeasure:
 
 def test_redact_hides_prefix():
     assert publish.redact("k7f3q9x2v8m1w4z6/tiles/x.pmtiles", "k7f3q9x2v8m1w4z6") == "<prefix>/tiles/x.pmtiles"
+
+
+def test_service_roads_use_tight_radius():
+    assert radius_for(_road(highway="service")) == PATH_RADIUS_M
+    assert radius_for(_road(highway="footway")) == PATH_RADIUS_M
+    assert radius_for(_road(highway="residential")) == ROAD_RADIUS_M
+
+
+class TestShards:
+    def test_each_cell_in_one_shard(self):
+        cells = [c for cs in shards.SHARD_CELLS.values() for c in cs]
+        assert len(cells) == len(set(cells))
+        assert shards.shard_of("53N 2W") == "uk-8"
+
+    def test_unknown_cell_falls_back(self):
+        assert shards.shard_of("49N 3W") == shards.FALLBACK_SHARD
+
+    def test_shards_are_areas_on_the_uk_extract(self):
+        for name in shards.SHARDS:
+            assert areas.get_area(name)["cells"] == set(shards.SHARD_CELLS[name])
+            assert areas.extract_url(name).endswith("/europe/united-kingdom-latest.osm.pbf")
+        assert areas.extract_url("leeds").endswith(
+            "/europe/united-kingdom/england/west-yorkshire-latest.osm.pbf")
+        assert areas.extract_name("leeds") == "west-yorkshire"
+
+
+class TestClient:
+    def _client(self, tmp_path, **kwargs):
+        client = StreetViewClient("key", MetadataCache(str(tmp_path / "c.sqlite")), **kwargs)
+        fetched = []
+
+        async def fake_fetch(session, key, attempts=5):
+            fetched.append(key)
+            return Lookup("ZERO_RESULTS")
+
+        client._fetch_one = fake_fetch
+        return client, fetched
+
+    def test_fetches_in_chunks(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(StreetViewClient, "CHUNK", 3)
+        client, fetched = self._client(tmp_path)
+        keys = [make_key(53.8 + i / 1000, -1.55, 25) for i in range(10)]
+        assert len(asyncio.run(client.lookup_many(keys))) == 10
+        assert sorted(fetched) == sorted(keys)
+        assert len(client.cache.get_many(keys)) == 10
+
+    def test_deadline_stops_before_next_chunk(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(StreetViewClient, "CHUNK", 3)
+        client, fetched = self._client(tmp_path, deadline=0.0)  # already passed
+        keys = [make_key(53.8 + i / 1000, -1.55, 25) for i in range(10)]
+        with pytest.raises(BudgetExceeded):
+            asyncio.run(client.lookup_many(keys))
+        assert fetched == []
+
+
+class TestStorageGuard:
+    PREFIX = "k7f3q9x2v8m1w4z6"
+
+    def test_refuses_before_uploading_when_over_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(publish, "STORAGE_LIMIT_BYTES", 100)
+        client = FakeR2({"big.sqlite.gz": {"Body": b"x" * 99}})
+        with pytest.raises(SystemExit):
+            publish.publish_site(client, "site", self.PREFIX, "leeds", _site(tmp_path))
+        assert client.calls == []
+
+    def test_counts_tiles_that_will_be_pruned_as_freed(self, tmp_path, monkeypatch):
+        p = self.PREFIX
+        client = FakeR2({
+            f"{p}/tiles/leeds-20260801-000000.pmtiles": {"Body": b"x" * 60},
+            f"{p}/tiles/leeds-20260901-000000.pmtiles": {"Body": b"x" * 30},
+        })
+        # 90 now + 7 new - 60 pruned = 37, under 50; without counting the prune it's 97
+        monkeypatch.setattr(publish, "STORAGE_LIMIT_BYTES", 50)
+        publish.publish_site(client, "site", p, "leeds", _site(tmp_path))
+        assert f"{p}/tiles/leeds-20260801-000000.pmtiles" not in client.objects
+
+    def test_list_objects_follows_pages(self):
+        class Paged:
+            def list_objects_v2(self, **kw):
+                if "ContinuationToken" not in kw:
+                    return {"Contents": [{"Key": "a"}], "IsTruncated": True,
+                            "NextContinuationToken": "t"}
+                return {"Contents": [{"Key": "b"}], "IsTruncated": False}
+
+        assert [o["Key"] for o in publish.list_objects(Paged(), "b")] == ["a", "b"]

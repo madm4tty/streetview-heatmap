@@ -18,7 +18,7 @@ import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("pipeline")
 
@@ -26,6 +26,9 @@ logger = logging.getLogger("pipeline")
 # The current tiles plus the previous ones, so a page loaded just before a
 # publish keeps working.
 KEEP_VERSIONS = 2
+
+# Refuse to publish beyond this, leaving headroom under R2's 10 GB free tier
+STORAGE_LIMIT_BYTES = 8 * 1000 ** 3
 
 # Each tiles file has a unique name, so browsers may cache it forever.
 # index.html changes on every publish, so browsers must re-check it.
@@ -101,13 +104,46 @@ def point_page_at(html: str, tiles_path: str) -> str:
     return new_html
 
 
+def list_objects(client, bucket: str, prefix: str = "") -> List[Dict]:
+    """Every object under `prefix`, following list pagination."""
+    objects, token = [], None
+    while True:
+        kwargs = {"Bucket": bucket, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = client.list_objects_v2(**kwargs)
+        objects += resp.get("Contents", [])
+        if not resp.get("IsTruncated"):
+            return objects
+        token = resp["NextContinuationToken"]
+
+
+def area_tiles(client, bucket: str, prefix: str, area: str) -> List[Dict]:
+    """The area's published tiles files, oldest first."""
+    # Match the exact area, so "leeds" never picks up "leeds-centre"
+    pattern = re.compile(rf"{re.escape(prefix)}/tiles/{re.escape(area)}-\d{{8}}-\d{{6}}\.pmtiles$")
+    found = [o for o in list_objects(client, bucket, f"{prefix}/tiles/{area}-")
+             if pattern.match(o["Key"])]
+    return sorted(found, key=lambda o: o["Key"])
+
+
+def check_storage(client, buckets: List[str], adding: int, freeing: int,
+                  limit: Optional[int] = None) -> int:
+    """Raise SystemExit if storage after this publish would exceed `limit`. Returns it."""
+    limit = STORAGE_LIMIT_BYTES if limit is None else limit
+    used = sum(o.get("Size", 0) for b in buckets for o in list_objects(client, b))
+    projected = used + adding - freeing
+    logger.info("R2 storage: %.2f GB now, %.2f GB after publishing", used / 1e9, projected / 1e9)
+    if projected > limit:
+        raise SystemExit(f"Publishing would take R2 storage to {projected / 1e9:.2f} GB, over the "
+                         f"{limit / 1e9:.0f} GB safety limit. Nothing was uploaded.")
+    return projected
+
+
 def prune_tiles(client, bucket: str, prefix: str, area: str,
                 keep: int = KEEP_VERSIONS) -> List[str]:
     """Delete all but the newest `keep` tiles files for `area`. Returns the deleted keys."""
-    # Match the exact area, so pruning "leeds" never touches "leeds-centre"
-    pattern = re.compile(rf"{re.escape(prefix)}/tiles/{re.escape(area)}-\d{{8}}-\d{{6}}\.pmtiles$")
-    resp = client.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/tiles/{area}-")
-    keys = sorted(o["Key"] for o in resp.get("Contents", []) if pattern.match(o["Key"]))
+    keys = [o["Key"] for o in area_tiles(client, bucket, prefix, area)]
     old = keys[:-keep] if keep > 0 else keys
     for key in old:
         client.delete_object(Bucket=bucket, Key=key)
@@ -116,16 +152,22 @@ def prune_tiles(client, bucket: str, prefix: str, area: str,
 
 
 def publish_site(client, bucket: str, prefix: str, area: str, site_dir: str,
-                 now: Optional[datetime] = None) -> str:
+                 now: Optional[datetime] = None, also_count: Tuple[str, ...] = ()) -> str:
     """Upload the area's tiles under a new name, then an index.html pointing at them.
 
-    Returns the key of the uploaded page.
+    Checks first that storage across `bucket` and `also_count` stays under the
+    limit once old tiles are pruned. Returns the key of the uploaded page.
     """
     pmtiles = os.path.join(site_dir, f"{area}.pmtiles")
     index = os.path.join(site_dir, "index.html")
     for path in (pmtiles, index):
         if not os.path.exists(path):
             raise SystemExit(f"{path} not found. Run: python3 -m pipeline.run tiles --area {area}")
+
+    existing = area_tiles(client, bucket, prefix, area)
+    pruned = existing[:max(0, len(existing) - (KEEP_VERSIONS - 1))]
+    check_storage(client, [bucket, *also_count], adding=os.path.getsize(pmtiles),
+                  freeing=sum(o.get("Size", 0) for o in pruned))
 
     # Relative to the page, so the page itself never needs to know the prefix
     tiles = tiles_key(area, now or datetime.now(timezone.utc))

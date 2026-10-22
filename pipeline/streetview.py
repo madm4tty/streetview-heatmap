@@ -7,7 +7,9 @@ transient failures back off and retry.
 
 import asyncio
 import logging
+import os
 import ssl
+import time
 from typing import Dict, List, Optional
 
 import aiohttp
@@ -41,6 +43,14 @@ def classify(lookup: Lookup) -> str:
     return lookup.date[:7]
 
 
+def ca_bundle() -> str:
+    """CA certificates to trust: SSL_CERT_FILE if set, else certifi's.
+
+    python.org builds of Python ship without CA certificates, hence certifi.
+    """
+    return os.environ.get("SSL_CERT_FILE") or certifi.where()
+
+
 class FatalAPIError(RuntimeError):
     """The API rejected the request (bad key, API not enabled, etc.)."""
 
@@ -69,9 +79,13 @@ class RateLimiter:
 class StreetViewClient:
     """Looks up metadata for many points, using and filling the cache."""
 
+    # Lookups started together. A UK shard's first round is over a million
+    # keys, too many to hold as tasks at once.
+    CHUNK = 20_000
+
     def __init__(self, api_key: str, cache: MetadataCache, concurrency: int = 50,
                  max_calls: Optional[int] = None, save_every: int = 500,
-                 rate_per_second: float = 300.0):
+                 rate_per_second: float = 300.0, deadline: Optional[float] = None):
         self.api_key = api_key
         self.cache = cache
         self.concurrency = concurrency
@@ -79,6 +93,9 @@ class StreetViewClient:
         self.save_every = save_every
         # Google's limit is 30,000/min (500/s); 300/s leaves headroom
         self.rate_per_second = rate_per_second
+        # time.monotonic() after which no new chunk starts, so a CI job can
+        # stop cleanly before its time limit and resume next run
+        self.deadline = deadline
         self.api_calls = 0
         self.cache_hits = 0
 
@@ -106,11 +123,12 @@ class StreetViewClient:
         sem = asyncio.Semaphore(self.concurrency)
         self._limiter = RateLimiter(self.rate_per_second)
         pending: List = []
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        ssl_context = ssl.create_default_context(cafile=ca_bundle())
         timeout = aiohttp.ClientTimeout(total=15)
 
         try:
-            async with aiohttp.ClientSession(
+            # trust_env: use HTTPS_PROXY when a network requires one
+            async with aiohttp.ClientSession(trust_env=True,
                     connector=aiohttp.TCPConnector(ssl=ssl_context, limit=self.concurrency),
                     timeout=timeout) as session:
 
@@ -126,7 +144,11 @@ class StreetViewClient:
                         self.cache.put_many(pending[:])
                         pending.clear()
 
-                await asyncio.gather(*(fetch(k) for k in missing))
+                for start in range(0, len(missing), self.CHUNK):
+                    if self.deadline is not None and time.monotonic() > self.deadline:
+                        raise BudgetExceeded(
+                            f"Time limit reached after {self.api_calls} API calls")
+                    await asyncio.gather(*(fetch(k) for k in missing[start:start + self.CHUNK]))
         finally:
             # Keep whatever was fetched, even if the run is aborted
             if pending:

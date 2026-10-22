@@ -30,6 +30,12 @@ def cell_of(lat: float, lon: float) -> str:
     return f"{abs(la)}{'N' if la >= 0 else 'S'} {abs(lo)}{'E' if lo >= 0 else 'W'}"
 
 
+def segment_cell(seg: Segment) -> str:
+    """The cell a way belongs to: the one holding its middle vertex."""
+    lat, lon = seg.coords[len(seg.coords) // 2]
+    return cell_of(lat, lon)
+
+
 def _empty() -> Dict:
     return {"ways": 0, "km": 0.0, "path_km": 0.0, "min_lookups": 0}
 
@@ -50,8 +56,7 @@ def tally(segments: Iterable[Segment],
     km_by_type: Counter = Counter()
     for seg in segments:
         _add(total, seg)
-        lat, lon = seg.coords[len(seg.coords) // 2]
-        _add(cells[cell_of(lat, lon)], seg)
+        _add(cells[segment_cell(seg)], seg)
         km_by_type[seg.highway] += seg.length / 1000
         if touches_bbox(seg, calibration_bbox):
             _add(calib, seg)

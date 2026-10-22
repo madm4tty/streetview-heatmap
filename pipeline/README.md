@@ -28,11 +28,11 @@ The key needs the **Street View Static API** enabled. Metadata lookups are free 
 # Full area and map
 .venv/bin/python -m pipeline.run sample --area leeds --mode bisect --max-calls 150000
 .venv/bin/python -m pipeline.run tiles  --area leeds --mode bisect
-.venv/bin/python -m pipeline.serve                              # http://localhost:8000/
+.venv/bin/python -m pipeline.serve        # http://localhost:8000/?tiles=leeds.pmtiles (the page defaults to uk.pmtiles)
 ```
 
-Every lookup is cached in `pipeline/data/metadata_cache.sqlite`, including "no imagery" answers.
-An interrupted run picks up where it stopped.
+Every lookup is cached in `pipeline/data/<area>.cache.sqlite`, including "no imagery" answers.
+An interrupted run picks up where it stopped. `--max-minutes` stops a run cleanly after that long, for the same effect.
 
 ## How sampling works
 
@@ -41,7 +41,8 @@ An interrupted run picks up where it stopped.
 
 Some details:
 - Lookups are inset 10 m from each end of a way, so they don't snap to the crossing road at a junction.
-- Footpaths and other path-like ways use a 10 m search radius. Roads use 25 m.
+- Footpaths, other path-like ways and `service` roads (driveways, car parks) use a 10 m search radius, so they
+  don't borrow the date of a road running beside them. Other roads use 25 m.
 - Only imagery whose copyright says "© Google" counts as dated. Results come from `source=outdoor`, and user photospheres show as "no Google imagery".
 
 ## Monthly refresh
@@ -86,12 +87,12 @@ Anyone with the link can pass it on. To revoke it, set a new `R2_SITE_PREFIX`, p
 then delete the old folder in the R2 dashboard (it stays public until you do).
 
 ```bash
-.venv/bin/python -m pipeline.run publish --area leeds
+.venv/bin/python -m pipeline.run publish --area uk
 ```
 
 `publish` uploads the tiles as `<prefix>/tiles/<area>-<YYYYMMDD-HHMMSS>.pmtiles`, then a `<prefix>/index.html` that
-points at them,
-then deletes all but the two newest tiles files for that area. Each publish gets a new tiles name, so browsers can
+points at them, then deletes all but the two newest tiles files for that area. Before uploading it adds up storage in
+both buckets and refuses if the result, after pruning, would pass 8 GB (R2's free tier is 10 GB). Each publish gets a new tiles name, so browsers can
 cache tiles forever without ever showing an old map. `index.html` is sent with `Cache-Control: no-cache`.
 
 A second, private bucket holds the state the monthly job needs: the lookup cache and the last sampling result.
@@ -114,12 +115,44 @@ Settings, from the environment or `.env`:
 **Never connect a custom domain to the state bucket.** Connecting a domain makes a bucket public, and the state
 bucket holds the whole lookup cache. Never upload anything to the site bucket outside the secret folder.
 
+## UK-wide build
+
+The UK is 1.17 million km of OSM ways (2026-10 `measure` run): 13–17 million lookups for a first full run, about
+10–12 hours at 400 lookups a second, and roughly 1.75 GB of tiles. That's too much for one GitHub Actions job (6-hour
+limit), so it's split into ten shards, `uk-1` to `uk-10` (`pipeline/shards.py`). Each shard is a set of 1° cells,
+and a way belongs to the cell holding its middle vertex, so every way is in exactly one shard. Each needs 1.0–1.7
+million lookups at minimum.
+
+Shards are areas like any other, with their own cache and result:
+
+```bash
+.venv/bin/python -m pipeline.run download --area uk-3                 # the whole UK extract, ~2 GB
+.venv/bin/python -m pipeline.run sample   --area uk-3 --rate 400 --concurrency 100
+.venv/bin/python -m pipeline.run tiles    --area uk-3
+tile-join -o pipeline/data/site/uk.pmtiles --no-tile-size-limit pipeline/data/site/uk-*.pmtiles
+```
+
+To size up an extract before sampling it (no API calls), run
+`python3 -m pipeline.run measure --pbf <extract>`, or the **Measure UK** workflow. It reports km and lookups per
+1° cell, which is what the shard table was packed from.
+
 ### Monthly build (GitHub Actions)
 
 `.github/workflows/build-map.yml` runs at 04:23 UTC on the 2nd of each month, and from **Actions → Build map → Run
-workflow**. It runs `pull-state`, `download`, then `refresh` (or a full `sample` if there's no previous result),
-`push-state`, `tiles` and `publish`. It needs these repository secrets: `GOOGLE_MAPS_API_KEY`, `R2_ACCOUNT_ID`,
-`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_SITE_PREFIX`.
+workflow**:
+
+1. **prepare** downloads the UK extract once, keeps only highways (`osmium tags-filter`) and passes it on.
+   It also re-enables the workflow, because GitHub disables scheduled workflows in public repos after 60 days
+   without commits.
+2. **shard** runs once per shard, one at a time so they share Google's 500 requests/s limit: `pull-state`,
+   `refresh` (or a full `sample` on the first run), `push-state`, `tiles`. Lookups stop after 300 minutes, so
+   the job saves its progress before the 6-hour limit.
+3. **publish** merges the shard tiles with `tile-join` and runs `publish --area uk`.
+
+A shard that runs out of time saves what it has and fails. That skips publish, so the current map stays up, and
+running the workflow again resumes where it stopped. The first full run takes 10–12 hours; a monthly refresh about
+2. It needs these repository secrets: `GOOGLE_MAPS_API_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+`R2_SECRET_ACCESS_KEY` and `R2_SITE_PREFIX`.
 
 ## Emergency stop
 
