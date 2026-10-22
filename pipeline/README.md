@@ -120,3 +120,37 @@ bucket holds the whole lookup cache. Never upload anything to the site bucket ou
 workflow**. It runs `pull-state`, `download`, then `refresh` (or a full `sample` if there's no previous result),
 `push-state`, `tiles` and `publish`. It needs these repository secrets: `GOOGLE_MAPS_API_KEY`, `R2_ACCOUNT_ID`,
 `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_SITE_PREFIX`.
+
+## Emergency stop
+
+R2 has no hard spending cap. A budget alert ($1, under **Manage Account → Billing → Billable Usage → Create budget
+alert**) only sends an email, and only the day after the threshold is crossed. Realistic exposure is tiny: egress is
+free, the free tier is 10 GB of storage and 10M reads a month, and `publish` keeps only the two newest tiles files,
+so storage stays flat. The real risks are a leaked R2 API token, `r2.dev` access being switched on, or the map link
+spreading and being hammered.
+
+If the bill or usage looks wrong, work through these in order:
+
+1. **Find the cause.** **Manage Account → Billing → Billable Usage** splits the cost into storage, Class A
+   operations (writes and lists) and Class B operations (reads). Many writes point to the token; many reads point
+   to the public link.
+2. **Revoke the R2 API token** (**R2 → Manage API tokens**). Do this first. It stops all S3 API access to both
+   buckets. The monthly build fails until you create a new token and update the `R2_*` secrets in GitHub (and in
+   the cloud environment, if you keep them there).
+3. **Cut off public reads.** In the `streetview-heatmap` bucket, go to **Settings → Custom Domains** and remove
+   `map.m4tty.co.uk`. Check that **Public Development URL** (`r2.dev`) is disabled on both buckets. The map goes offline.
+4. **Stop storage charges.** Delete objects in the dashboard, or for large volumes add an object lifecycle rule
+   that deletes everything after 1 day (bucket **Settings → Object lifecycle rules**). Nothing in either bucket is
+   irreplaceable. Without the state bucket the next build does a full `sample` again (about 115k free lookups for
+   Leeds) instead of a refresh.
+5. **Afterwards:** look for API tokens you don't recognise (R2 tokens and **My Profile → API Tokens**) and unknown
+   account members, confirm two-factor login is on, and contact Cloudflare billing support about charges caused by
+   misuse. If the link leaked, publish under a new `R2_SITE_PREFIX` (see [Hosting](#cloudflare-r2-current-setup)).
+6. **This is not automated, by design.** A script that could revoke tokens would need a more powerful token, and
+   that token would be a new risk.
+
+If the Google key leaks, delete or regenerate it in Google Cloud Console (**APIs & Services → Credentials**) and
+update `GOOGLE_MAPS_API_KEY` in GitHub. It is restricted to the Street View Static API, but billed image requests
+use that same API, so keep a budget alert on the Google project and a low daily quota cap on the API (for example
+100 requests a day). Google's docs say metadata requests are free and use no quota, so the cap doesn't block the
+pipeline, which never loads images.
