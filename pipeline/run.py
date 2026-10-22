@@ -10,6 +10,7 @@ Usage:
     python3 -m pipeline.run publish  --area leeds          # upload the site to R2
     python3 -m pipeline.run pull-state --area leeds        # restore cache from R2
     python3 -m pipeline.run push-state --area leeds        # save cache to R2
+    python3 -m pipeline.run measure  --pbf uk.osm.pbf      # size up a big extract, no API calls
 """
 
 import argparse
@@ -27,12 +28,12 @@ from typing import Dict, List
 
 import certifi
 
-from pipeline import areas, publish
+from pipeline import areas, measure, publish
 from pipeline.cache import Key, MetadataCache
 from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces,
                              save_pieces, write_geojsonseq)
 from pipeline.refresh import refresh
-from pipeline.roads import load_segments
+from pipeline.roads import iter_segments, load_segments
 from pipeline.sampler import sample_bisect, sample_dense
 from pipeline.streetview import BudgetExceeded, FatalAPIError, StreetViewClient, classify
 
@@ -215,10 +216,23 @@ def state_paths(area: str) -> List[str]:
     return [CACHE_PATH, pieces_path(area, "bisect")]
 
 
+def cmd_measure(args) -> None:
+    result = measure.tally(iter_segments(args.pbf), areas.get_area("leeds")["bbox"])
+    est = measure.estimates(result)
+    measure.write_json(result, est, args.out)
+    report = measure.report_markdown(result, est)
+    print(report)
+    # In GitHub Actions, also show the report on the run's summary page
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as f:
+            f.write(report)
+
+
 def cmd_publish(args) -> None:
     bucket, prefix = publish.site_bucket(), publish.site_prefix()
     page = publish.publish_site(publish.r2_client(bucket), bucket, prefix, args.area, SITE_DIR)
-    print(f"\nPublished {page} to the {bucket} bucket")
+    print(f"\nPublished {publish.redact(page, prefix)} to the {bucket} bucket")
 
 
 def cmd_pull_state(args) -> None:
@@ -267,13 +281,17 @@ def main(argv=None) -> None:
             p.add_argument("--force", action="store_true",
                            help="Replace local files with the copies in R2")
 
+    p = sub.add_parser("measure", help="Road length and lookup estimates for an extract")
+    p.add_argument("--pbf", required=True, help="Path to an .osm.pbf extract")
+    p.add_argument("--out", default="measure.json", help="Where to write the full results")
+
     args = parser.parse_args(argv)
     load_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     {"download": cmd_download, "estimate": cmd_estimate, "sample": cmd_sample,
      "compare": cmd_compare, "tiles": cmd_tiles, "refresh": cmd_refresh,
      "publish": cmd_publish, "pull-state": cmd_pull_state,
-     "push-state": cmd_push_state}[args.command](args)
+     "push-state": cmd_push_state, "measure": cmd_measure}[args.command](args)
 
 
 if __name__ == "__main__":

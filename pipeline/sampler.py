@@ -74,6 +74,16 @@ async def sample_dense(segments: List[Segment], resolve: Resolver,
     return merge_pieces([Piece(seg.id, a, b, values[k]) for seg, a, b, k in plan])
 
 
+def min_bisect_lookups(length: float, max_span: float = 400.0, min_span: float = 30.0) -> int:
+    """Lookups sample_bisect makes on a segment whose imagery never changes.
+
+    Each change of value along the segment adds a few more on top.
+    """
+    if length <= 2 * END_INSET_M + min_span:
+        return 1
+    return max(1, math.ceil((length - 2 * END_INSET_M) / max_span)) + 1
+
+
 async def sample_bisect(segments: List[Segment], resolve: Resolver,
                         max_span: float = 400.0, min_span: float = 30.0) -> List[Piece]:
     """Adaptive sampling: split stretches only where their ends disagree.

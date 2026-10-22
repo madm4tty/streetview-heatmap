@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pipeline import publish
+from pipeline import measure, publish
 from pipeline.cache import Lookup, MetadataCache, make_key
 from pipeline.export import agreement_by_length, month_index, piece_properties
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
 from pipeline.refresh import refresh
 from pipeline.roads import Segment, include_way
-from pipeline.sampler import Piece, merge_pieces, sample_bisect, sample_dense
+from pipeline.sampler import (Piece, merge_pieces, min_bisect_lookups, sample_bisect,
+                              sample_dense)
 from pipeline.streetview import NO_COVERAGE, NON_GOOGLE, RateLimiter, classify
 
 # A straight east-west road in Leeds, roughly 1 km long
@@ -387,3 +388,48 @@ class TestState:
 
         with pytest.raises(PermissionError):
             publish.pull_state(Broken(), "state", [str(tmp_path / "cache.sqlite")])
+
+
+class TestMeasure:
+    LEEDS = (-1.65, 53.72, -1.40, 53.87)
+
+    @pytest.mark.parametrize("length", [5, 50, 51, 420, 421, 1000, 5000])
+    def test_min_lookups_matches_bisect_on_uniform_road(self, length):
+        # A road due north from Leeds, `length` metres long, all one value
+        end = (53.8 + length / 111_195, -1.55)
+        seg = Segment(id="r", highway="residential", name=None, coords=[(53.8, -1.55), end])
+        calls = []
+
+        async def resolve(keys):
+            calls.extend(keys)
+            return {k: "2020-01" for k in keys}
+
+        asyncio.run(sample_bisect([seg], resolve))
+        assert len(set(calls)) == min_bisect_lookups(seg.length)
+
+    def test_cell_names(self):
+        assert measure.cell_of(53.8, -1.55) == "53N 2W"
+        assert measure.cell_of(51.5, 0.1) == "51N 0E"
+        assert measure.cell_of(54.6, -5.9) == "54N 6W"
+
+    def test_tally_counts_each_way_once_and_calibrates(self):
+        roads = [
+            _road("a"),  # in Leeds
+            Segment(id="b", highway="footway", name=None,
+                    coords=[(54.6, -5.93), (54.6, -5.92)]),  # Belfast
+        ]
+        result = measure.tally(roads, self.LEEDS)
+        assert result["total"]["ways"] == 2
+        assert set(result["cells"]) == {"53N 2W", "54N 6W"}
+        assert result["cells"]["54N 6W"]["path_km"] == pytest.approx(
+            result["cells"]["54N 6W"]["km"])
+        assert result["calibration"]["ways"] == 1
+
+        est = measure.estimates(result)
+        assert est["lookups_low"] == result["total"]["min_lookups"]
+        assert est["lookups_high"] > est["lookups_low"]
+        assert "54N 6W" in measure.report_markdown(result, est)
+
+
+def test_redact_hides_prefix():
+    assert publish.redact("k7f3q9x2v8m1w4z6/tiles/x.pmtiles", "k7f3q9x2v8m1w4z6") == "<prefix>/tiles/x.pmtiles"
