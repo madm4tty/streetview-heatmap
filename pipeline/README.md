@@ -1,7 +1,7 @@
-# Batch pipeline (pilot)
+# Pipeline
 
 Builds a static Street View age map: OSM roads → Street View metadata → PMTiles → one HTML page.
-It doesn't need Flask, the scheduler or PostgreSQL. The output is two files that any web server can host.
+The output is two files that any web server with HTTP range support can host.
 
 ## Setup (build machine only)
 

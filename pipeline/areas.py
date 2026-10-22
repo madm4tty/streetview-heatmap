@@ -7,9 +7,8 @@ from typing import Dict, Tuple
 
 GEOFABRIK = "https://download.geofabrik.de/europe/united-kingdom/england"
 
-# bbox is (min_lon, min_lat, max_lon, max_lat), same order as geographic_scope.py
+# bbox is (min_lon, min_lat, max_lon, max_lat)
 AREAS: Dict[str, Dict] = {
-    # Same bbox as UK_MAJOR_CITIES["leeds"] in geographic_scope.py
     "leeds": {
         "bbox": (-1.65, 53.72, -1.40, 53.87),
         "extract": "west-yorkshire",

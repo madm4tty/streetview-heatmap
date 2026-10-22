@@ -4,76 +4,48 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Flask web app that visualizes the age of Google Street View imagery across UK road networks. It queries the Google Street View metadata API and colours OpenStreetMap road segments by capture date. Uses PostgreSQL/PostGIS in production and SQLite for development/testing.
+Batch pipeline that maps the age of Google Street View imagery on UK roads. It reads OSM roads from a Geofabrik
+extract, samples them against the Street View metadata API, builds a PMTiles file with tippecanoe and publishes
+it with a static MapLibre page to Cloudflare R2. There is no server, scheduler or database beyond a SQLite cache.
 
 ## Commands
 
 ```bash
-# Run the app (default port 5001, not 5000 — avoids macOS AirPlay conflict)
-python3 run.py
-python3 run.py --debug --port 5001
+python3 -m pytest                                        # all tests (no network, no osmium/tippecanoe needed)
+python3 -m pytest tests/test_pipeline.py::TestPublish -v
 
-# Run all tests
-python3 -m pytest
-
-# Run a single test file
-python3 -m pytest tests/test_api.py
-
-# Run a specific test
-python3 -m pytest tests/test_api.py::test_health_endpoint -v
-
-# Run with coverage
-python3 -m pytest --cov=app --cov-report=html
-
-# Start PostgreSQL (required for production features)
-docker-compose up -d postgres
-
-# Run database migrations
-python3 migrations/001_create_job_status.py
+python3 -m pipeline.run download --area leeds
+python3 -m pipeline.run sample   --area leeds --mode bisect
+python3 -m pipeline.run refresh  --area leeds           # monthly update after the first full sample
+python3 -m pipeline.run tiles    --area leeds           # needs tippecanoe
+python3 -m pipeline.serve                               # local preview with Range support
+python3 -m pipeline.run publish  --area leeds           # upload to R2
+python3 -m pipeline.run pull-state / push-state --area leeds
 ```
 
-## Architecture
+## Layout
 
-### Processing Pipeline
+- `pipeline/run.py`: CLI entry point; paths for data, cache and site output
+- `pipeline/roads.py`: .osm.pbf → one `Segment` per OSM way (osmium)
+- `pipeline/sampler.py`: dense and bisection sampling into `Piece`s
+- `pipeline/streetview.py`: async metadata client, rate limiter, `classify` (only `© Google` is dated)
+- `pipeline/cache.py`: SQLite lookup cache keyed on integer micro-degrees
+- `pipeline/refresh.py`: monthly refresh via one sentinel per 250 m cell
+- `pipeline/export.py`: GeoJSONSeq and tippecanoe
+- `pipeline/publish.py`: R2 upload under a secret prefix, and state sync
+- `pipeline/web/index.html`: MapLibre page; `const DEFAULT_TILES` is rewritten by `publish`
+- `pipeline/data/`: downloads, cache and build output (gitignored)
 
-`scheduler.py` selects tiles → `processing.py` runs per-tile pipeline:
-1. Fetch OSM roads from Overpass API
-2. Sample evenly-spaced points along roads (adaptive by road importance)
-3. Check database cache to skip known points
-4. Async batch query Google Street View metadata API (`aiohttp`)
-5. Save results + road LineString geometries to database
+## Conventions
 
-### Tile System
-
-UK is divided into a 0.05° grid (~44,000 tiles). Each tile is named `tile_{lonIdx}_{latIdx}`. Tiles are prioritised by city overlap (high/medium/low) defined in `geographic_scope.py`. The scheduler uses a two-phase strategy: process never-seen tiles first (high→medium→low), then refresh stale data by age thresholds.
-
-### Database Layer (`database.py`)
-
-Dual-backend abstraction — PostgreSQL with PostGIS or SQLite. PostgreSQL-specific code paths are guarded with `if _backend == "postgresql"`. Key tables: `metadata` (Street View points with geometry), `road_segments` (pre-computed LineStrings), `job_status` (background job tracking). Uses `psycopg2.extras.execute_values()` for bulk inserts.
-
-### Frontend
-
-Vanilla JS + Leaflet.js. Viewport-based tile loading — only requests data for tiles visible on screen. The frontend requests `format=roads` to get LineString GeoJSON (falls back to points). Key files: `app/static/js/map.js` (map logic), `app/static/js/api.js` (API client with auth headers).
-
-### Configuration (`config.py` + `config.yaml`)
-
-YAML config with environment variable substitution (`${VAR}` or `${VAR:-default}`). Runtime-updatable via `POST /api/config` (requires API key). Write endpoints use `X-API-Key` header auth via `require_api_key` decorator.
-
-### Background Scheduler (`app/scheduler.py`)
-
-APScheduler `BackgroundScheduler` with thread-safe job state (`_job_lock`). Module-level state tracks `_current_job` and `_last_job_result`. Only one job runs at a time.
-
-## Testing Patterns
-
-- Tests set `DATABASE_URL=''` to force SQLite backend
-- Each test file sets env vars at module level before importing app code
-- Flask test client via `app.test_client()` fixture (no conftest.py — fixtures are per-file)
-- External services (database, Overpass API, Google API) are mocked with `unittest.mock.patch`
-- CI runs via GitHub Actions (`.github/workflows/python-app.yml`)
+- Use `python3`, not `python`.
+- Tests live in `tests/test_pipeline.py` and use fakes (fake resolvers, `FakeR2`), never the network.
+- Never commit `.env` or keys. Never upload to the site bucket outside `R2_SITE_PREFIX`, and never connect a
+  domain to the state bucket.
 
 ## Key Env Vars
 
-- `GOOGLE_MAPS_API_KEY` — Google Street View metadata API
-- `DATABASE_URL` — PostgreSQL connection string (empty = SQLite)
-- `API_KEY` — auth for write API endpoints
-- `GMAPS_APIKEY` — GitHub Codespaces alias, auto-mapped to `GOOGLE_MAPS_API_KEY`
+- `GOOGLE_MAPS_API_KEY` (or `GMAPS_APIKEY`): Street View metadata API
+- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`: R2 API token
+- `R2_SITE_PREFIX`: secret folder the site is published under
+- `R2_BUCKET`, `R2_STATE_BUCKET`: optional bucket name overrides

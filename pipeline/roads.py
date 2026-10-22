@@ -1,6 +1,6 @@
 """Read road geometry from a Geofabrik .osm.pbf extract.
 
-Replaces the per-tile Overpass queries in app/processing.py. Each OSM way
+Reading a local extract avoids Overpass rate limits. Each OSM way
 becomes one segment, the unit the sampler works on. Ways are deliberately
 not split at junctions: in Leeds that gives a median segment of 28 m and
 ~70% more lookups, and bisection finds the date change points anyway.
