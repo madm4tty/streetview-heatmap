@@ -43,16 +43,6 @@ coverage.xml
 *.sqlite
 *.sqlite3
 
-# Logs
-logs/*.log
-heatmap_generation.log
-!logs/.gitkeep
-
-# Output files
-heatmap*.html
-results.csv
-*.csv
-
 # IDE
 .vscode/
 .idea/

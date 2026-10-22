@@ -1,4 +1,4 @@
-# Batch pipeline only. The Flask app uses ../requirements.txt
+# Pipeline runtime dependencies. Tests also need pytest and pytest-asyncio.
 osmium>=4.0
 aiohttp>=3.9
 certifi>=2023.0.0

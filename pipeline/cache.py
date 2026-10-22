@@ -1,7 +1,7 @@
 """SQLite cache of Street View metadata lookups, so interrupted runs resume.
 
 Keys are integer micro-degrees plus search radius. Integers compare exactly,
-which avoids the float-rounding cache misses in the old database.py.
+so there are no float-rounding cache misses.
 Every definitive answer is stored, including ZERO_RESULTS, so points with
 no coverage are never re-queried.
 """

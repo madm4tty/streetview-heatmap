@@ -1,6 +1,6 @@
 """Small geometry helpers for measuring and cutting road polylines.
 
-Coordinates are (lat, lon) tuples, matching app/processing.py.
+Coordinates are (lat, lon) tuples.
 """
 
 import bisect
