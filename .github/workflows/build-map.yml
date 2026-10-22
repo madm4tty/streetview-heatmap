@@ -1,0 +1,78 @@
+name: Build map
+
+# Monthly: restore state from R2, fetch the latest OSM roads, re-check Street View,
+# rebuild the tiles and publish them. Can also be started by hand from the Actions tab.
+on:
+  workflow_dispatch:
+    inputs:
+      area:
+        description: Area to build (see pipeline/areas.py)
+        default: leeds
+  schedule:
+    - cron: "23 4 2 * *"   # 04:23 UTC on the 2nd of each month
+
+# Never run two builds at once: both would write the same state files
+concurrency:
+  group: build-map
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      AREA: ${{ inputs.area || 'leeds' }}
+      GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      TIPPECANOE_VERSION: "2.79.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python3 -m pip install -r pipeline/requirements.txt
+
+      - name: Restore tippecanoe build
+        id: tippecanoe
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/tippecanoe
+          key: tippecanoe-${{ env.TIPPECANOE_VERSION }}-${{ runner.os }}
+
+      - name: Build tippecanoe
+        if: steps.tippecanoe.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$TIPPECANOE_VERSION" https://github.com/felt/tippecanoe.git /tmp/tippecanoe
+          make -C /tmp/tippecanoe -j"$(nproc)"
+          mkdir -p ~/.local/bin
+          cp /tmp/tippecanoe/tippecanoe ~/.local/bin/
+
+      - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Restore cache and last result from R2
+        id: pull
+        run: python3 -m pipeline.run pull-state --area "$AREA"
+
+      - run: python3 -m pipeline.run download --area "$AREA"
+
+      - name: Sample (first run) or refresh
+        run: |
+          if [ -f "pipeline/data/${AREA}-bisect.pieces.jsonl" ]; then
+            python3 -m pipeline.run refresh --area "$AREA"
+          else
+            python3 -m pipeline.run sample --area "$AREA" --mode bisect
+          fi
+
+      # Runs even if sampling failed, so a long run's lookups aren't lost.
+      # Never runs if the restore failed, or it would overwrite good state with nothing.
+      - name: Save cache and result to R2
+        if: always() && steps.pull.outcome == 'success'
+        run: python3 -m pipeline.run push-state --area "$AREA"
+
+      - run: python3 -m pipeline.run tiles --area "$AREA"
+
+      - run: python3 -m pipeline.run publish --area "$AREA"

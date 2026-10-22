@@ -64,7 +64,9 @@
   const NO_IMAGERY_COLOR = "#9ca3af";
 
   const params = new URLSearchParams(location.search);
-  const tilesUrl = params.get("tiles") || "leeds.pmtiles";
+  // `pipeline.run publish` rewrites this to the versioned file it uploads
+  const DEFAULT_TILES = "leeds.pmtiles";
+  const tilesUrl = params.get("tiles") || DEFAULT_TILES;
 
   // Ages are worked out against today's date in the browser, so the
   // tiles never need rebuilding just because time has passed.

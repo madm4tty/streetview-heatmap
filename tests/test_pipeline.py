@@ -1,9 +1,13 @@
 """Tests for the batch pipeline (pipeline/). No network or osmium needed."""
 
 import asyncio
+import gzip
+import os
+from datetime import datetime, timezone
 
 import pytest
 
+from pipeline import publish
 from pipeline.cache import Lookup, MetadataCache, make_key
 from pipeline.export import agreement_by_length, month_index, piece_properties
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
@@ -243,3 +247,123 @@ class TestRefresh:
         cache.put_many([(key, Lookup("ZERO_RESULTS"))])
         assert cache.get_many([key], fresh_after="2000-01-01 00:00:00") != {}
         assert cache.get_many([key], fresh_after="2999-01-01 00:00:00") == {}
+
+
+class FakeR2:
+    """In-memory stand-in for the boto3 S3 client, recording call order."""
+
+    def __init__(self, objects=None):
+        self.objects = dict(objects or {})
+        self.calls = []
+
+    def upload_file(self, path, bucket, key, ExtraArgs=None):
+        self.calls.append(("upload", key))
+        with open(path, "rb") as f:
+            self.objects[key] = {"Body": f.read(), **(ExtraArgs or {})}
+
+    def put_object(self, Bucket, Key, Body, **kwargs):
+        self.calls.append(("put", Key))
+        self.objects[Key] = {"Body": Body, **kwargs}
+
+    def list_objects_v2(self, Bucket, Prefix):
+        return {"Contents": [{"Key": k} for k in self.objects if k.startswith(Prefix)]}
+
+    def delete_object(self, Bucket, Key):
+        self.calls.append(("delete", Key))
+        del self.objects[Key]
+
+    def download_file(self, bucket, key, path):
+        if key not in self.objects:
+            exc = Exception("Not Found")
+            exc.response = {"Error": {"Code": "404"}}
+            raise exc
+        with open(path, "wb") as f:
+            f.write(self.objects[key]["Body"])
+
+
+PAGE = '<script>\n  const DEFAULT_TILES = "leeds.pmtiles";\n</script>\n'
+
+
+def _site(tmp_path, area="leeds"):
+    (tmp_path / f"{area}.pmtiles").write_bytes(b"PMTiles")
+    (tmp_path / "index.html").write_text(PAGE)
+    return str(tmp_path)
+
+
+class TestPublish:
+    NOW = datetime(2026, 10, 22, 10, 45, 30, tzinfo=timezone.utc)
+
+    def test_point_page_at_rewrites_default(self):
+        html = publish.point_page_at(PAGE, "tiles/leeds-20261022-104530.pmtiles")
+        assert 'const DEFAULT_TILES = "tiles/leeds-20261022-104530.pmtiles";' in html
+
+    def test_point_page_at_requires_marker(self):
+        with pytest.raises(ValueError):
+            publish.point_page_at("<html></html>", "x.pmtiles")
+
+    def test_shipped_page_has_marker(self):
+        path = os.path.join(os.path.dirname(publish.__file__), "web", "index.html")
+        with open(path, encoding="utf-8") as f:
+            assert "tiles/x.pmtiles" in publish.point_page_at(f.read(), "tiles/x.pmtiles")
+
+    def test_uploads_tiles_before_page(self, tmp_path):
+        client = FakeR2()
+        key = publish.publish_site(client, "site", "leeds", _site(tmp_path), now=self.NOW)
+        assert key == "tiles/leeds-20261022-104530.pmtiles"
+        assert client.calls == [("upload", key), ("put", "index.html")]
+        assert client.objects[key]["CacheControl"] == publish.IMMUTABLE
+        page = client.objects["index.html"]
+        assert page["CacheControl"] == "no-cache"
+        assert f'"{key}"'.encode() in page["Body"]
+
+    def test_keeps_two_newest_versions_of_this_area_only(self, tmp_path):
+        client = FakeR2({k: {"Body": b""} for k in (
+            "tiles/leeds-20260801-000000.pmtiles",
+            "tiles/leeds-20260901-000000.pmtiles",
+            "tiles/leeds-centre-20260101-000000.pmtiles",
+        )})
+        publish.publish_site(client, "site", "leeds", _site(tmp_path), now=self.NOW)
+        assert sorted(k for k in client.objects if k.startswith("tiles/")) == [
+            "tiles/leeds-20260901-000000.pmtiles",
+            "tiles/leeds-20261022-104530.pmtiles",
+            "tiles/leeds-centre-20260101-000000.pmtiles",
+        ]
+
+    def test_missing_build_fails_before_uploading(self, tmp_path):
+        client = FakeR2()
+        with pytest.raises(SystemExit):
+            publish.publish_site(client, "site", "leeds", str(tmp_path))
+        assert client.calls == []
+
+
+class TestState:
+    def test_round_trip(self, tmp_path):
+        cache, pieces = tmp_path / "cache.sqlite", tmp_path / "leeds-bisect.pieces.jsonl"
+        cache.write_bytes(b"sqlite bytes" * 100)
+        client = FakeR2()
+        assert publish.push_state(client, "state", [str(cache), str(pieces)]) == ["cache.sqlite.gz"]
+
+        restored = tmp_path / "restored" / "cache.sqlite"
+        assert publish.pull_state(client, "state", [str(restored)]) == [str(restored)]
+        assert restored.read_bytes() == cache.read_bytes()
+
+    def test_pull_skips_missing_and_keeps_local(self, tmp_path):
+        local = tmp_path / "cache.sqlite"
+        local.write_bytes(b"local")
+        client = FakeR2({"cache.sqlite.gz": {"Body": gzip.compress(b"remote")}})
+        missing = tmp_path / "leeds-bisect.pieces.jsonl"
+
+        assert publish.pull_state(client, "state", [str(local), str(missing)]) == []
+        assert local.read_bytes() == b"local"
+        assert not missing.exists()
+
+        assert publish.pull_state(client, "state", [str(local)], force=True) == [str(local)]
+        assert local.read_bytes() == b"remote"
+
+    def test_pull_reraises_other_errors(self, tmp_path):
+        class Broken(FakeR2):
+            def download_file(self, bucket, key, path):
+                raise PermissionError("denied")
+
+        with pytest.raises(PermissionError):
+            publish.pull_state(Broken(), "state", [str(tmp_path / "cache.sqlite")])
