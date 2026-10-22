@@ -8,7 +8,7 @@ not split at junctions: in Leeds that gives a median segment of 28 m and
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from pipeline.areas import in_bbox
 from pipeline.geo import Coord, cumulative_lengths
@@ -67,21 +67,14 @@ def include_way(tags: Dict[str, str]) -> bool:
     return True
 
 
-def load_segments(pbf_path: str,
-                  bbox: Tuple[float, float, float, float]) -> List[Segment]:
-    """Load one segment per highway way that touches bbox.
-
-    Args:
-        pbf_path: Path to an .osm.pbf extract
-        bbox: (min_lon, min_lat, max_lon, max_lat)
-    """
+def iter_segments(pbf_path: str) -> Iterator[Segment]:
+    """Yield one segment per included highway way in an .osm.pbf extract."""
     import osmium  # Imported here so tests don't need pyosmium installed
 
     processor = (osmium.FileProcessor(pbf_path)
                  .with_locations()
                  .with_filter(osmium.filter.KeyFilter("highway")))
 
-    segments = []
     for obj in processor:
         if not obj.is_way():
             continue
@@ -93,12 +86,27 @@ def load_segments(pbf_path: str,
             coords = [(n.location.lat, n.location.lon) for n in obj.nodes]
         except osmium.InvalidLocationError:
             continue  # Way references nodes outside the extract
-        if len(coords) < 2 or not any(in_bbox(lat, lon, bbox) for lat, lon in coords):
+        if len(coords) < 2:
             continue
         seg = Segment(id=str(obj.id), highway=tags["highway"], name=tags["name"],
                       coords=coords)
         if seg.length >= 1.0:
-            segments.append(seg)
+            yield seg
+
+
+def touches_bbox(seg: Segment, bbox: Tuple[float, float, float, float]) -> bool:
+    return any(in_bbox(lat, lon, bbox) for lat, lon in seg.coords)
+
+
+def load_segments(pbf_path: str,
+                  bbox: Tuple[float, float, float, float]) -> List[Segment]:
+    """Load one segment per highway way that touches bbox.
+
+    Args:
+        pbf_path: Path to an .osm.pbf extract
+        bbox: (min_lon, min_lat, max_lon, max_lat)
+    """
+    segments = [s for s in iter_segments(pbf_path) if touches_bbox(s, bbox)]
 
     logger.info("Loaded %d segments (%.0f km)",
                 len(segments), sum(s.length for s in segments) / 1000)

@@ -29,11 +29,6 @@ cp .env.example .env    # then fill in your keys
 .venv/bin/python -m pytest
 ```
 
-## Google terms
-
-Storing Street View dates and showing them on a non-Google base map conflicts with sections 3.2.3(a), (b), (c)
-and (e) of the Google Maps Platform Terms. That's why the map is only shared privately by unlisted link.
-
 ## History
 
 This replaced a Flask + APScheduler + PostgreSQL/PostGIS app that sampled a 0.05° tile grid via Overpass.

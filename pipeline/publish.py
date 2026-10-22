@@ -84,6 +84,11 @@ def r2_client(bucket: str):
     return client
 
 
+def redact(key: str, prefix: str) -> str:
+    """Hide the secret folder in log output; the repo and its build logs are public."""
+    return key.replace(prefix, "<prefix>")
+
+
 def tiles_key(area: str, now: datetime) -> str:
     return f"tiles/{area}-{now:%Y%m%d-%H%M%S}.pmtiles"
 
@@ -106,7 +111,7 @@ def prune_tiles(client, bucket: str, prefix: str, area: str,
     old = keys[:-keep] if keep > 0 else keys
     for key in old:
         client.delete_object(Bucket=bucket, Key=key)
-        logger.info("Deleted old tiles %s", key)
+        logger.info("Deleted old tiles %s", redact(key, prefix))
     return old
 
 
@@ -126,7 +131,7 @@ def publish_site(client, bucket: str, prefix: str, area: str, site_dir: str,
     tiles = tiles_key(area, now or datetime.now(timezone.utc))
     tiles_object = f"{prefix}/{tiles}"
     # Tiles first, so the live page never points at a file that isn't there yet
-    logger.info("Uploading %s -> %s/%s", pmtiles, bucket, tiles_object)
+    logger.info("Uploading %s -> %s/%s", pmtiles, bucket, redact(tiles_object, prefix))
     client.upload_file(pmtiles, bucket, tiles_object, ExtraArgs={
         "ContentType": "application/octet-stream", "CacheControl": IMMUTABLE})
 
@@ -135,7 +140,7 @@ def publish_site(client, bucket: str, prefix: str, area: str, site_dir: str,
     page_object = f"{prefix}/index.html"
     client.put_object(Bucket=bucket, Key=page_object, Body=page.encode("utf-8"),
                       ContentType="text/html; charset=utf-8", CacheControl=NO_CACHE)
-    logger.info("Uploaded %s", page_object)
+    logger.info("Uploaded %s", redact(page_object, prefix))
 
     prune_tiles(client, bucket, prefix, area)
     return page_object

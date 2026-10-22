@@ -1,0 +1,42 @@
+name: Measure UK
+
+# Sizes up UK-wide coverage before committing to it: road length per 1° cell,
+# lookup estimates and tile size. No API calls and no secrets, so it can run on
+# pull requests that change the measurement code.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/measure-uk.yml
+      - pipeline/measure.py
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python3 -m pip install -r pipeline/requirements.txt
+
+      - name: Download the UK extract
+        run: |
+          mkdir -p pipeline/data
+          curl -fsSL -o pipeline/data/united-kingdom-latest.osm.pbf \
+            https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf
+          ls -lh pipeline/data/united-kingdom-latest.osm.pbf
+
+      - name: Measure
+        run: |
+          /usr/bin/time -v python3 -m pipeline.run measure \
+            --pbf pipeline/data/united-kingdom-latest.osm.pbf --out measure-uk.json 2> time.log
+          grep -E "Elapsed|Maximum resident" time.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: measure-uk
+          path: measure-uk.json

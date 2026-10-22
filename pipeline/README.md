@@ -78,7 +78,7 @@ the HTTP range requests that PMTiles needs without extra configuration. Python's
 
 ### Cloudflare R2 (current setup)
 
-The map is shared by unlisted link: `https://map.m4tty.co.uk/<R2_SITE_PREFIX>/index.html`. The bucket is public on
+The map is shared by unlisted link: `https://map.<your-domain>/<R2_SITE_PREFIX>/index.html`. The bucket is public on
 that custom domain, but everything lives under a secret folder. R2 never lists a bucket's contents, so without the
 link there's nothing to find. Don't rely on the subdomain staying unknown: certificate transparency logs publish it.
 
@@ -138,7 +138,7 @@ If the bill or usage looks wrong, work through these in order:
    buckets. The monthly build fails until you create a new token and update the `R2_*` secrets in GitHub (and in
    the cloud environment, if you keep them there).
 3. **Cut off public reads.** In the `streetview-heatmap` bucket, go to **Settings → Custom Domains** and remove
-   `map.m4tty.co.uk`. Check that **Public Development URL** (`r2.dev`) is disabled on both buckets. The map goes offline.
+   the `map.` custom domain. Check that **Public Development URL** (`r2.dev`) is disabled on both buckets. The map goes offline.
 4. **Stop storage charges.** Delete objects in the dashboard, or for large volumes add an object lifecycle rule
    that deletes everything after 1 day (bucket **Settings → Object lifecycle rules**). Nothing in either bucket is
    irreplaceable. Without the state bucket the next build does a full `sample` again (about 115k free lookups for
