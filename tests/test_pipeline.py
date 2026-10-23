@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pipeline import areas, measure, overview, publish, shards
+from pipeline import areas, measure, overview, publish, run, shards
 from pipeline.cache import Lookup, MetadataCache, make_key
 from pipeline.export import agreement_by_length, month_index, piece_properties
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
@@ -482,6 +482,16 @@ class TestClient:
         assert sorted(fetched) == sorted(keys)
         assert len(client.cache.get_many(keys)) == 10
 
+    def test_stale_cache_entries_are_asked_again(self, tmp_path):
+        """What a full rebuild relies on: an old cached answer is re-queried."""
+        client, fetched = self._client(tmp_path)
+        key = make_key(53.8, -1.55, 25)
+        client.cache.put_many([(key, Lookup("OK", "pano", "2015-06", 53.8, -1.55, "© Google"))])
+        asyncio.run(client.lookup_many([key]))
+        assert fetched == []  # reused by default
+        asyncio.run(client.lookup_many([key], fresh_after="2999-01-01 00:00:00"))
+        assert fetched == [key]
+
     def test_deadline_stops_before_next_chunk(self, tmp_path, monkeypatch):
         monkeypatch.setattr(StreetViewClient, "CHUNK", 3)
         client, fetched = self._client(tmp_path, deadline=0.0)  # already passed
@@ -600,3 +610,18 @@ class TestPublishOverview:
         publish.publish_site(client, "site", p, "leeds", _site(tmp_path), now=self.NOW)
         assert not any(k in client.objects for k in old)
         assert all(k in client.objects for k in mid)
+
+
+class TestFullRebuild:
+    def test_fresh_cutoff(self):
+        now = datetime(2026, 11, 2, 4, 23, 0, tzinfo=timezone.utc)
+        assert run.fresh_cutoff(None, now) is None
+        assert run.fresh_cutoff(25, now) == "2026-10-08 04:23:00"
+
+    def test_sample_accepts_max_age(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(run, "cmd_sample", lambda args: seen.update(vars(args)))
+        run.main(["sample", "--area", "uk-3", "--max-age-days", "25"])
+        assert seen["max_age_days"] == 25
+        run.main(["sample", "--area", "uk-3"])
+        assert seen["max_age_days"] is None

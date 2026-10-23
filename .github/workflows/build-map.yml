@@ -7,8 +7,21 @@ name: Build map
 #            from the shards' tallies, and upload both
 # A shard that hits its time limit saves its progress and fails, which skips
 # publish and leaves the current map up; running the workflow again resumes it.
+#
+# Each shard refreshes if R2 holds its previous result, and samples from scratch
+# if not. "Full rebuild" makes every shard sample from scratch, re-asking any
+# cached lookup older than 25 days (see pipeline/README.md for when to use it).
+run-name: Build map${{ inputs.full_rebuild && ' (full rebuild)' || '' }}
+
 on:
   workflow_dispatch:
+    inputs:
+      full_rebuild:
+        description: >-
+          Full rebuild: re-sample every road instead of refreshing. About 12 hours.
+          Use once a year, or after changing the sampling rules.
+        type: boolean
+        default: false
   schedule:
     - cron: "23 4 2 * *"   # 04:23 UTC on the 2nd of each month
 
@@ -101,11 +114,18 @@ jobs:
         id: pull
         run: python3 -m pipeline.run pull-state --area "$AREA"
 
-      # Stops starting new lookups after 300 minutes, leaving time to save state
-      - name: Sample (first run) or refresh
+      # Stops starting new lookups after 300 minutes, leaving time to save state.
+      # A full rebuild ignores the previous result and re-asks lookups older than
+      # 25 days; ones from an interrupted rebuild this month are reused, so
+      # ticking the box again resumes it.
+      - name: Sample (first run or full rebuild) or refresh
+        env:
+          FULL_REBUILD: ${{ inputs.full_rebuild || false }}
         run: |
           OPTS="--area $AREA --rate 400 --concurrency 100 --max-minutes 300"
-          if [ -f "pipeline/data/${AREA}-bisect.pieces.jsonl" ]; then
+          if [ "$FULL_REBUILD" = "true" ]; then
+            python3 -m pipeline.run sample --mode bisect --max-age-days 25 $OPTS
+          elif [ -f "pipeline/data/${AREA}-bisect.pieces.jsonl" ]; then
             python3 -m pipeline.run refresh $OPTS
           else
             python3 -m pipeline.run sample --mode bisect $OPTS
