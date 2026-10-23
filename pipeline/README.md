@@ -69,7 +69,8 @@ Leeds trial (2026-10-21, forced with `--max-age-days 0` on the same day as the f
 - re-sampling them reproduced the original map exactly (100% match).
 
 **Limitation:** a new capture that skips a cell's sentinel road isn't detected until a later refresh or a full re-sample.
-A full re-sample once a year is a cheap safety net, at about 115k free calls for Leeds.
+A full re-sample once a year is a cheap safety net, at about 115k free calls for Leeds. Note that plain `sample`
+reuses every cached lookup however old, so a real re-sample needs `--max-age-days` (see *Full rebuild* below).
 
 ## The map page
 
@@ -166,14 +167,39 @@ workflow**:
    It also re-enables the workflow, because GitHub disables scheduled workflows in public repos after 60 days
    without commits.
 2. **shard** runs once per shard, one at a time so they share Google's 500 requests/s limit: `pull-state`,
-   `refresh` (or a full `sample` on the first run), `push-state`, `tiles`. Lookups stop after 300 minutes, so
-   the job saves its progress before the 6-hour limit.
+   then `refresh` or `sample` (below), `push-state`, `tiles`. Lookups stop after 300 minutes, so the job saves
+   its progress before the 6-hour limit.
 3. **publish** merges the shard tiles with `tile-join` and runs `publish --area uk`.
 
 A shard that runs out of time saves what it has and fails. That skips publish, so the current map stays up, and
 running the workflow again resumes where it stopped. The first full run takes 10–12 hours; a monthly refresh about
-2. It needs these repository secrets: `GOOGLE_MAPS_API_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+2–3. It needs these repository secrets: `GOOGLE_MAPS_API_KEY`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
 `R2_SECRET_ACCESS_KEY` and `R2_SITE_PREFIX`.
+
+**What each shard does** depends only on the state bucket and the run's *Full rebuild* box:
+
+| Full rebuild ticked? | `uk-N-bisect.pieces.jsonl.gz` in R2? | Shard runs |
+|---|---|---|
+| No | yes | `refresh`: fresh sentinels, re-sample only changed cells and new or reshaped roads |
+| No | no (first run) | `sample`, reusing any cached lookups |
+| Yes | either | `sample --max-age-days 25`: every road, re-asking lookups older than 25 days |
+
+Scheduled runs never tick the box, so they always refresh once a shard has a result.
+
+### Full rebuild
+
+**Actions → Build map → Run workflow**, tick **Full rebuild**. The run shows as "Build map (full rebuild)" and takes
+about 12 hours. Use it:
+
+- once a year, to catch new captures that missed every sentinel;
+- after changing the sampling rules (search radii, end inset, bisection spans, or what counts as dated imagery),
+  because a refresh only revisits roads in changed cells;
+- if an area you know was recently driven still shows old dates after a couple of refreshes.
+
+It doesn't delete anything first. Each shard's previous result is replaced only when its new sample completes, and
+the live map changes only when all ten succeed and publish runs. If a rebuild stops part-way, run it again **with
+the box ticked**: lookups from the first attempt are under 25 days old, so they're reused and finished shards take
+minutes. Running without the box instead would refresh, leaving the unfinished shards on their old results.
 
 ## Emergency stop
 

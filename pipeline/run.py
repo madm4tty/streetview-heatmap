@@ -24,7 +24,7 @@ import time
 import urllib.request
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from pipeline import areas, measure, overview, publish
 from pipeline.cache import Key, MetadataCache
@@ -125,13 +125,25 @@ def coverage_summary(pieces) -> str:
     return ", ".join(f"{k} {v:,.0f} km" for k, v in values.most_common())
 
 
+def fresh_cutoff(max_age_days: Optional[float], now: Optional[datetime] = None) -> Optional[str]:
+    """Cache timestamp before which lookups count as stale, or None to trust them all."""
+    if max_age_days is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return (now - timedelta(days=max_age_days)).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def cmd_sample(args) -> None:
     segments = load_area_segments(args.area)
     client = make_client(args)
     cache = client.cache
+    # By default every cached lookup is reused, however old. A full rebuild sets
+    # a maximum age so old answers are asked again, while lookups from an
+    # interrupted attempt this month still count.
+    cutoff = fresh_cutoff(args.max_age_days)
 
     async def resolve(keys: List[Key]) -> Dict[Key, str]:
-        lookups = await client.lookup_many(keys)
+        lookups = await client.lookup_many(keys, fresh_after=cutoff)
         return {k: classify(v) for k, v in lookups.items()}
 
     start = time.time()
@@ -167,8 +179,7 @@ def cmd_refresh(args) -> None:
     client = make_client(args)
     # Cache entries newer than this count as fresh, so a rerun in the same
     # month resumes instead of starting again.
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=args.max_age_days)
-              ).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff = fresh_cutoff(args.max_age_days)
 
     async def resolve_fresh(keys: List[Key]) -> Dict[Key, str]:
         lookups = await client.lookup_many(keys, fresh_after=cutoff)
@@ -308,6 +319,8 @@ def main(argv=None) -> None:
                            help="Dense mode: metres between lookups (default 20)")
             p.add_argument("--max-span", type=float, default=400.0,
                            help="Bisect mode: longest stretch assumed uniform (default 400)")
+            p.add_argument("--max-age-days", type=float, default=None,
+                           help="Re-query cached lookups older than this (default: reuse all)")
             p.add_argument("--min-span", type=float, default=30.0,
                            help="Bisect mode: stop splitting below this (default 30)")
         if name == "refresh":
