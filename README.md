@@ -14,8 +14,9 @@ A monthly batch job builds two static files: a PMTiles map file and one HTML pag
 4. Build vector tiles with tippecanoe and show them on a MapLibre page.
 5. Upload to Cloudflare R2, shared by an unlisted link.
 
-Leeds (5,302 km of road): about 115k free lookups for a full run, 14% of that for a monthly refresh,
-and a 7.9 MB map.
+The UK is 1.17 million km of OSM ways: 13–17 million free lookups and 10–12 hours for the first full build,
+split into ten shards on GitHub Actions, then a monthly refresh of about 2 hours. The Leeds pilot needed 14% of a
+full run's lookups for a refresh.
 
 ## Using it
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Batch pipeline that maps the age of Google Street View imagery on UK roads. It reads OSM roads from a Geofabrik
+Batch pipeline that maps the age of Google Street View imagery on all UK roads. It reads OSM roads from a Geofabrik
 extract, samples them against the Street View metadata API, builds a PMTiles file with tippecanoe and publishes
 it with a static MapLibre page to Cloudflare R2. There is no server, scheduler or database beyond a SQLite cache.
 
@@ -21,11 +21,16 @@ python3 -m pipeline.run tiles    --area leeds           # needs tippecanoe
 python3 -m pipeline.serve                               # local preview with Range support
 python3 -m pipeline.run publish  --area leeds           # upload to R2
 python3 -m pipeline.run pull-state / push-state --area leeds
+python3 -m pipeline.run measure  --pbf <extract>         # size up an extract, no API calls
+# UK: areas uk-1 … uk-10 are sampled and tiled separately, merged with tile-join, published as --area uk
 ```
 
 ## Layout
 
 - `pipeline/run.py`: CLI entry point; paths for data, cache and site output
+- `pipeline/areas.py`: named areas (bounding boxes, or UK shards) and their Geofabrik extracts
+- `pipeline/shards.py`: the UK split into ten shards of 1° cells, each about an hour of lookups
+- `pipeline/measure.py`: km and lookup estimates for a whole extract, no API calls
 - `pipeline/roads.py`: .osm.pbf → one `Segment` per OSM way (osmium)
 - `pipeline/sampler.py`: dense and bisection sampling into `Piece`s
 - `pipeline/streetview.py`: async metadata client, rate limiter, `classify` (only `© Google` is dated)

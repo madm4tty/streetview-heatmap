@@ -26,8 +26,6 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
-import certifi
-
 from pipeline import areas, measure, publish
 from pipeline.cache import Key, MetadataCache
 from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces,
@@ -35,18 +33,23 @@ from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces,
 from pipeline.refresh import refresh
 from pipeline.roads import iter_segments, load_segments
 from pipeline.sampler import sample_bisect, sample_dense
-from pipeline.streetview import BudgetExceeded, FatalAPIError, StreetViewClient, classify
+from pipeline.streetview import (BudgetExceeded, FatalAPIError, StreetViewClient, ca_bundle,
+                                 classify)
 
 logger = logging.getLogger("pipeline")
 
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(PIPELINE_DIR, "data")
 SITE_DIR = os.path.join(DATA_DIR, "site")
-CACHE_PATH = os.path.join(DATA_DIR, "metadata_cache.sqlite")
 
 
 def pbf_path(area: str) -> str:
-    return os.path.join(DATA_DIR, f"{areas.get_area(area)['extract']}-latest.osm.pbf")
+    return os.path.join(DATA_DIR, f"{areas.extract_name(area)}-latest.osm.pbf")
+
+
+def cache_path(area: str) -> str:
+    """One lookup cache per area, so shards can be saved and restored independently."""
+    return os.path.join(DATA_DIR, f"{area}.cache.sqlite")
 
 
 def pieces_path(area: str, mode: str) -> str:
@@ -72,8 +75,7 @@ def cmd_download(args) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     url, dest = areas.extract_url(args.area), pbf_path(args.area)
     logger.info("Downloading %s -> %s", url, dest)
-    # python.org builds of Python ship without CA certificates, so use certifi's
-    context = ssl.create_default_context(cafile=certifi.where())
+    context = ssl.create_default_context(cafile=ca_bundle())
     with urllib.request.urlopen(url, context=context) as resp, open(dest, "wb") as f:
         shutil.copyfileobj(resp, f)
     logger.info("Done (%.1f MB)", os.path.getsize(dest) / 1e6)
@@ -83,7 +85,15 @@ def load_area_segments(area: str):
     path = pbf_path(area)
     if not os.path.exists(path):
         raise SystemExit(f"{path} not found. Run: python3 -m pipeline.run download --area {area}")
-    return load_segments(path, areas.get_area(area)["bbox"])
+    spec = areas.get_area(area)
+    if "shards" in spec:
+        raise SystemExit(f"'{area}' is processed shard by shard: use --area {spec['shards'][0]} etc.")
+    if "cells" in spec:
+        segments = [s for s in iter_segments(path) if measure.segment_cell(s) in spec["cells"]]
+        logger.info("Loaded %d segments (%.0f km)",
+                    len(segments), sum(s.length for s in segments) / 1000)
+        return segments
+    return load_segments(path, spec["bbox"])
 
 
 def cmd_estimate(args) -> None:
@@ -101,9 +111,11 @@ def cmd_estimate(args) -> None:
 
 
 def make_client(args) -> StreetViewClient:
-    return StreetViewClient(get_api_key(), MetadataCache(CACHE_PATH),
+    deadline = time.monotonic() + args.max_minutes * 60 if args.max_minutes else None
+    os.makedirs(DATA_DIR, exist_ok=True)
+    return StreetViewClient(get_api_key(), MetadataCache(cache_path(args.area)),
                             concurrency=args.concurrency, max_calls=args.max_calls,
-                            rate_per_second=args.rate)
+                            rate_per_second=args.rate, deadline=deadline)
 
 
 def coverage_summary(pieces) -> str:
@@ -140,7 +152,7 @@ def cmd_sample(args) -> None:
     km = sum(s.length for s in segments) / 1000
     lookups = client.api_calls + client.cache_hits
     print(f"\n{args.area} ({args.mode}): {km:,.0f} km of road in {elapsed:,.0f}s")
-    print(f"  lookups: {lookups:,} ({lookups / km:.1f} per km); "
+    print(f"  lookups: {lookups:,} ({lookups / max(km, 0.001):.1f} per km); "
           f"API calls: {client.api_calls:,}, cache hits: {client.cache_hits:,}")
     print(f"  coverage by length: {coverage_summary(pieces)}")
     print(f"  saved {len(pieces):,} pieces to {pieces_path(args.area, args.mode)}")
@@ -213,7 +225,7 @@ def cmd_tiles(args) -> None:
 
 
 def state_paths(area: str) -> List[str]:
-    return [CACHE_PATH, pieces_path(area, "bisect")]
+    return [cache_path(area), pieces_path(area, "bisect")]
 
 
 def cmd_measure(args) -> None:
@@ -231,7 +243,8 @@ def cmd_measure(args) -> None:
 
 def cmd_publish(args) -> None:
     bucket, prefix = publish.site_bucket(), publish.site_prefix()
-    page = publish.publish_site(publish.r2_client(bucket), bucket, prefix, args.area, SITE_DIR)
+    page = publish.publish_site(publish.r2_client(bucket), bucket, prefix, args.area, SITE_DIR,
+                                also_count=(publish.state_bucket(),))
     print(f"\nPublished {publish.redact(page, prefix)} to the {bucket} bucket")
 
 
@@ -277,6 +290,8 @@ def main(argv=None) -> None:
                            help="Max API requests per second (Google allows 500; default 300)")
             p.add_argument("--max-calls", type=int, default=None,
                            help="Abort before exceeding this many API calls")
+            p.add_argument("--max-minutes", type=float, default=None,
+                           help="Stop starting new lookups after this long; rerun to resume")
         if name == "pull-state":
             p.add_argument("--force", action="store_true",
                            help="Replace local files with the copies in R2")
