@@ -35,7 +35,7 @@ STORAGE_LIMIT_BYTES = 8 * 1000 ** 3
 IMMUTABLE = "public, max-age=31536000, immutable"
 NO_CACHE = "no-cache"
 
-DEFAULT_TILES_RE = re.compile(r'(const DEFAULT_TILES = )"[^"]*";')
+PAGE_CONSTANT_RE = r'(const {name} = )"[^"]*";'
 
 # Long and random enough that nobody guesses it, and safe in a URL path
 SITE_PREFIX_RE = re.compile(r"[A-Za-z0-9_-]{16,}")
@@ -92,16 +92,24 @@ def redact(key: str, prefix: str) -> str:
     return key.replace(prefix, "<prefix>")
 
 
-def tiles_key(area: str, now: datetime) -> str:
-    return f"tiles/{area}-{now:%Y%m%d-%H%M%S}.pmtiles"
+def version_keys(area: str, now: datetime) -> Tuple[str, str]:
+    """Tiles and overview paths for one publish, relative to the page."""
+    stem = f"tiles/{area}-{now:%Y%m%d-%H%M%S}"
+    return f"{stem}.pmtiles", f"{stem}.overview.json"
 
 
-def point_page_at(html: str, tiles_path: str) -> str:
-    """Set the page's default tiles file to `tiles_path`."""
-    new_html, n = DEFAULT_TILES_RE.subn(lambda m: f'{m.group(1)}"{tiles_path}";', html)
+def set_page_constant(html: str, name: str, value: str) -> str:
+    new_html, n = re.subn(PAGE_CONSTANT_RE.format(name=name),
+                          lambda m: f'{m.group(1)}"{value}";', html)
     if n != 1:
-        raise ValueError("index.html must contain exactly one `const DEFAULT_TILES = \"...\";` line")
+        raise ValueError(f"index.html must contain exactly one `const {name} = \"...\";` line")
     return new_html
+
+
+def point_page_at(html: str, tiles_path: str, overview_path: str = "") -> str:
+    """Set the page's default tiles file and overview (empty: none)."""
+    html = set_page_constant(html, "DEFAULT_TILES", tiles_path)
+    return set_page_constant(html, "DEFAULT_OVERVIEW", overview_path)
 
 
 def list_objects(client, bucket: str, prefix: str = "") -> List[Dict]:
@@ -118,13 +126,17 @@ def list_objects(client, bucket: str, prefix: str = "") -> List[Dict]:
         token = resp["NextContinuationToken"]
 
 
-def area_tiles(client, bucket: str, prefix: str, area: str) -> List[Dict]:
-    """The area's published tiles files, oldest first."""
+def area_versions(client, bucket: str, prefix: str, area: str) -> List[List[Dict]]:
+    """The area's published versions, oldest first; each is its tiles and overview files."""
     # Match the exact area, so "leeds" never picks up "leeds-centre"
-    pattern = re.compile(rf"{re.escape(prefix)}/tiles/{re.escape(area)}-\d{{8}}-\d{{6}}\.pmtiles$")
-    found = [o for o in list_objects(client, bucket, f"{prefix}/tiles/{area}-")
-             if pattern.match(o["Key"])]
-    return sorted(found, key=lambda o: o["Key"])
+    pattern = re.compile(rf"{re.escape(prefix)}/tiles/{re.escape(area)}-(\d{{8}}-\d{{6}})"
+                         rf"\.(pmtiles|overview\.json)$")
+    versions: Dict[str, List[Dict]] = {}
+    for o in list_objects(client, bucket, f"{prefix}/tiles/{area}-"):
+        match = pattern.match(o["Key"])
+        if match:
+            versions.setdefault(match.group(1), []).append(o)
+    return [versions[stamp] for stamp in sorted(versions)]
 
 
 def check_storage(client, buckets: List[str], adding: int, freeing: int,
@@ -142,9 +154,9 @@ def check_storage(client, buckets: List[str], adding: int, freeing: int,
 
 def prune_tiles(client, bucket: str, prefix: str, area: str,
                 keep: int = KEEP_VERSIONS) -> List[str]:
-    """Delete all but the newest `keep` tiles files for `area`. Returns the deleted keys."""
-    keys = [o["Key"] for o in area_tiles(client, bucket, prefix, area)]
-    old = keys[:-keep] if keep > 0 else keys
+    """Delete all but the newest `keep` versions for `area`. Returns the deleted keys."""
+    versions = area_versions(client, bucket, prefix, area)
+    old = [o["Key"] for v in (versions[:-keep] if keep > 0 else versions) for o in v]
     for key in old:
         client.delete_object(Bucket=bucket, Key=key)
         logger.info("Deleted old tiles %s", redact(key, prefix))
@@ -163,22 +175,29 @@ def publish_site(client, bucket: str, prefix: str, area: str, site_dir: str,
     for path in (pmtiles, index):
         if not os.path.exists(path):
             raise SystemExit(f"{path} not found. Run: python3 -m pipeline.run tiles --area {area}")
+    # Optional: without it the page shows roads at every zoom and no "in view" panel
+    overview_file = os.path.join(site_dir, f"{area}.overview.json")
+    has_overview = os.path.exists(overview_file)
 
-    existing = area_tiles(client, bucket, prefix, area)
+    existing = area_versions(client, bucket, prefix, area)
     pruned = existing[:max(0, len(existing) - (KEEP_VERSIONS - 1))]
-    check_storage(client, [bucket, *also_count], adding=os.path.getsize(pmtiles),
-                  freeing=sum(o.get("Size", 0) for o in pruned))
+    adding = os.path.getsize(pmtiles) + (os.path.getsize(overview_file) if has_overview else 0)
+    check_storage(client, [bucket, *also_count], adding=adding,
+                  freeing=sum(o.get("Size", 0) for v in pruned for o in v))
 
     # Relative to the page, so the page itself never needs to know the prefix
-    tiles = tiles_key(area, now or datetime.now(timezone.utc))
-    tiles_object = f"{prefix}/{tiles}"
-    # Tiles first, so the live page never points at a file that isn't there yet
-    logger.info("Uploading %s -> %s/%s", pmtiles, bucket, redact(tiles_object, prefix))
-    client.upload_file(pmtiles, bucket, tiles_object, ExtraArgs={
-        "ContentType": "application/octet-stream", "CacheControl": IMMUTABLE})
+    tiles, overview = version_keys(area, now or datetime.now(timezone.utc))
+    # Data first, so the live page never points at a file that isn't there yet
+    uploads = [(pmtiles, tiles, "application/octet-stream")]
+    if has_overview:
+        uploads.append((overview_file, overview, "application/json"))
+    for path, key, content_type in uploads:
+        logger.info("Uploading %s -> %s/%s", path, bucket, redact(f"{prefix}/{key}", prefix))
+        client.upload_file(path, bucket, f"{prefix}/{key}", ExtraArgs={
+            "ContentType": content_type, "CacheControl": IMMUTABLE})
 
     with open(index, encoding="utf-8") as f:
-        page = point_page_at(f.read(), tiles)
+        page = point_page_at(f.read(), tiles, overview if has_overview else "")
     page_object = f"{prefix}/index.html"
     client.put_object(Bucket=bucket, Key=page_object, Body=page.encode("utf-8"),
                       ContentType="text/html; charset=utf-8", CacheControl=NO_CACHE)

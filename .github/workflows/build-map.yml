@@ -3,7 +3,8 @@ name: Build map
 # Monthly UK build, also startable from the Actions tab:
 #   prepare  download the UK extract once and cut it down to highways
 #   shard    sample (first run) or refresh each shard in turn, saving state to R2
-#   publish  merge the shard tiles into one UK file and upload it
+#   publish  merge the shard tiles into one UK file, build the hexagon overview
+#            from the shards' tallies, and upload both
 # A shard that hits its time limit saves its progress and fails, which skips
 # publish and leaves the current map up; running the workflow again resumes it.
 on:
@@ -116,12 +117,15 @@ jobs:
         if: always() && steps.pull.outcome == 'success'
         run: python3 -m pipeline.run push-state --area "$AREA"
 
+      # Tiles, plus the shard's hexagon tallies for the overview
       - run: python3 -m pipeline.run tiles --area "$AREA"
 
       - uses: actions/upload-artifact@v4
         with:
           name: tiles-${{ matrix.shard }}
-          path: pipeline/data/site/${{ matrix.shard }}.pmtiles
+          path: |
+            pipeline/data/site/${{ matrix.shard }}.pmtiles
+            pipeline/data/${{ matrix.shard }}.hexstats.json
           retention-days: 3
 
   publish:
@@ -149,17 +153,19 @@ jobs:
           key: tippecanoe-${{ env.TIPPECANOE_VERSION }}-with-tile-join-${{ runner.os }}
           fail-on-cache-miss: true
 
+      # Each artifact holds site/uk-N.pmtiles and uk-N.hexstats.json, relative to pipeline/data
       - uses: actions/download-artifact@v4
         with:
           pattern: tiles-*
-          path: shard-tiles
+          path: pipeline/data
           merge-multiple: true
 
-      - name: Merge shard tiles
+      - name: Merge shard tiles and build the overview
         run: |
-          mkdir -p pipeline/data/site
-          ~/.local/bin/tile-join -o pipeline/data/site/uk.pmtiles --force --no-tile-size-limit shard-tiles/*.pmtiles
+          ~/.local/bin/tile-join -o pipeline/data/site/uk.pmtiles --force --no-tile-size-limit \
+            pipeline/data/site/uk-*.pmtiles
+          python3 -m pipeline.run overview --area uk
           cp pipeline/web/index.html pipeline/data/site/
-          ls -lh shard-tiles pipeline/data/site
+          ls -lh pipeline/data pipeline/data/site
 
       - run: python3 -m pipeline.run publish --area uk

@@ -11,76 +11,205 @@
 <script src="https://unpkg.com/pmtiles@4.5.0/dist/pmtiles.js"></script>
 <style>
   :root {
-    --panel-bg: rgba(255, 255, 255, 0.94);
+    --panel-bg: #ffffff;
     --panel-fg: #1f2937;
     --muted: #6b7280;
     --border: #e5e7eb;
+    --track: #eef0f3;
+    --hover: #f3f4f6;
+    --accent: #2563eb;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --panel-bg: rgba(17, 24, 39, 0.94);
+      --panel-bg: #111827;
       --panel-fg: #f3f4f6;
       --muted: #9ca3af;
       --border: #374151;
+      --track: #273142;
+      --hover: #1f2937;
+      --accent: #60a5fa;
     }
   }
-  html, body { margin: 0; height: 100%; background: #f8fafc; }
+  html, body { margin: 0; height: 100%; background: #f2f3f0; }
   body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
   #map { position: absolute; inset: 0; }
+
   .panel {
-    position: absolute; top: 12px; left: 12px; max-width: calc(100% - 24px);
+    position: absolute; top: 12px; left: 12px; width: 300px; max-height: calc(100% - 24px);
+    overflow: auto; box-sizing: border-box;
     background: var(--panel-bg); color: var(--panel-fg);
     border: 1px solid var(--border); border-radius: 8px;
     padding: 12px 14px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    z-index: 3;  /* above MapLibre's controls (z-index 2) */
   }
-  .panel h1 { font-size: 15px; margin: 0 0 8px; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .panel h1 { font-size: 15px; margin: 0; }
+  .text-btn {
+    font: inherit; font-size: 13px; color: var(--accent); background: none; border: 0;
+    padding: 6px 4px; cursor: pointer; min-height: 32px;
+  }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  #in-view { margin: 10px 0 6px; }
+  #in-view strong { color: var(--panel-fg); }
+
+  .search { position: relative; margin-top: 10px; }
+  .search input {
+    width: 100%; box-sizing: border-box; font: inherit; padding: 8px 10px; min-height: 36px;
+    border: 1px solid var(--border); border-radius: 6px; background: transparent; color: inherit;
+  }
+  .search ul {
+    list-style: none; margin: 4px 0 0; padding: 4px 0; position: absolute; left: 0; right: 0; z-index: 2;
+    background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+  .search li { padding: 8px 10px; cursor: pointer; }
+  .search li[aria-selected="true"], .search li:hover { background: var(--hover); }
+  .search li .muted { font-size: 12px; }
+
+  /* Legend rows double as the "in view" breakdown and as on/off toggles */
   .legend { list-style: none; margin: 0; padding: 0; }
-  .legend li { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-  .swatch { width: 22px; height: 4px; border-radius: 2px; flex: none; }
-  .swatch.dashed {
-    background: repeating-linear-gradient(90deg, #9ca3af 0 5px, transparent 5px 8px);
+  .legend button {
+    display: grid; grid-template-columns: 22px 1fr auto; grid-template-rows: auto 6px;
+    column-gap: 8px; row-gap: 3px; align-items: center;
+    width: 100%; font: inherit; color: inherit; text-align: left;
+    background: none; border: 0; border-radius: 6px; padding: 6px 4px; cursor: pointer; min-height: 40px;
   }
-  .panel label { display: flex; gap: 6px; align-items: center; margin-top: 8px; color: var(--muted); }
+  .legend button:hover { background: var(--hover); }
+  .legend button[aria-pressed="false"] .label,
+  .legend button[aria-pressed="false"] .pct { color: var(--muted); text-decoration: line-through; }
+  .legend button[aria-pressed="false"] .swatch,
+  .legend button[aria-pressed="false"] .bar span { opacity: 0.25; }
+  .swatch { width: 22px; height: 5px; border-radius: 3px; grid-row: 1; }
+  .swatch.dashed {
+    background: repeating-linear-gradient(90deg, #9ca3af 0 5px, transparent 5px 8px) !important;
+  }
+  .pct { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+  .bar { grid-column: 2 / 4; grid-row: 2; height: 4px; background: var(--track); border-radius: 2px; overflow: hidden; }
+  .bar span { display: block; height: 100%; border-radius: 2px; width: 0; transition: width 0.2s; }
+
+  .controls { margin-top: 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .controls label { display: flex; gap: 8px; align-items: center; min-height: 28px; }
+  .controls select {
+    flex: 1; min-width: 0;  /* fit the panel, however long the option text */
+    font: inherit; color: inherit; background: transparent; padding: 4px 6px;
+    border: 1px solid var(--border); border-radius: 6px; min-height: 32px;
+  }
+  .controls select option { color: #1f2937; }
+  #as-of { margin: 10px 0 0; }
+
   .maplibregl-popup-content { font: 13px/1.4 system-ui, sans-serif; color: #1f2937; }
   .maplibregl-popup-content h2 { font-size: 14px; margin: 0 0 4px; }
   .maplibregl-popup-content a { display: inline-block; margin-top: 6px; }
+
+  /* Phones: the panel becomes a drawer along the bottom, closed to start with */
+  @media (max-width: 640px) {
+    .panel {
+      top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 55vh;
+      border-radius: 12px 12px 0 0; border-bottom: 0; padding: 8px 16px 16px;
+    }
+    .panel.closed #panel-body { display: none; }
+    .panel.closed { padding-bottom: 8px; }
+    /* Keep the attribution and scale clear of the closed drawer */
+    .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { bottom: 52px; }
+  }
+  @media (min-width: 641px) {
+    .panel.closed #panel-body { display: none; }
+  }
 </style>
 </head>
 <body>
 <div id="map"></div>
-<div class="panel">
-  <h1>Street View imagery age</h1>
-  <ul class="legend" id="legend"></ul>
-  <label><input type="checkbox" id="show-none" checked> Show roads with no Google imagery</label>
-</div>
+<aside class="panel" id="panel" aria-label="Legend and statistics">
+  <div class="panel-head">
+    <h1>Street View imagery age</h1>
+    <button class="text-btn" id="toggle-panel" aria-expanded="true" aria-controls="panel-body">Hide</button>
+  </div>
+  <div id="panel-body">
+    <form class="search" role="search" id="search">
+      <input type="search" id="search-input" placeholder="Search for a place" autocomplete="off"
+             aria-label="Search for a place" aria-controls="search-results" aria-autocomplete="list">
+      <ul id="search-results" role="listbox" hidden></ul>
+    </form>
+    <p id="in-view" class="muted" aria-live="polite"></p>
+    <ul class="legend" id="legend"></ul>
+    <div class="controls">
+      <label>Show
+        <select id="road-type">
+          <option value="all">all ways</option>
+          <option value="roads">roads only (no paths or driveways)</option>
+          <option value="major">major roads only</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="cvd"> Colour-blind friendly colours</label>
+    </div>
+    <p class="muted small" id="as-of"></p>
+  </div>
+</aside>
 <script>
-  // Age bands in months
-  const AGE_BANDS = [
-    { maxMonths: 6, color: "#22c55e", label: "Under 6 months" },
-    { maxMonths: 12, color: "#84cc16", label: "6–12 months" },
-    { maxMonths: 36, color: "#eab308", label: "1–3 years" },
-    { maxMonths: 60, color: "#f97316", label: "3–5 years" },
-    { maxMonths: 120, color: "#ef4444", label: "5–10 years" },
-    { maxMonths: Infinity, color: "#b91c1c", label: "Over 10 years" },
+  // Age bands in months. Edges match BAND_EDGES_MONTHS in pipeline/overview.py
+  const BANDS = [
+    { maxMonths: 6, label: "Under 6 months" },
+    { maxMonths: 12, label: "6–12 months" },
+    { maxMonths: 36, label: "1–3 years" },
+    { maxMonths: 60, label: "3–5 years" },
+    { maxMonths: 120, label: "5–10 years" },
+    { maxMonths: Infinity, label: "Over 10 years" },
   ];
+  const PALETTES = {
+    classic: ["#22c55e", "#84cc16", "#eab308", "#f97316", "#ef4444", "#b91c1c"],
+    // One hue, light (recent) to dark (old); passes the ordinal palette checks
+    // against the base map, including for colour-blind viewers
+    cvd: ["#72a8e6", "#4f8fda", "#2f74c9", "#1d5aa8", "#143f7d", "#0b2650"],
+  };
   const NO_IMAGERY_COLOR = "#9ca3af";
+  // Match PATH_HIGHWAYS in pipeline/roads.py; "roads only" also leaves out service roads
+  const PATHS = ["footway", "path", "cycleway", "bridleway", "steps", "pedestrian", "track"];
+  const MAJOR = ["motorway", "trunk", "primary", "secondary",
+                 "motorway_link", "trunk_link", "primary_link", "secondary_link"];
+  const UK_BBOX = [-8.7, 49.8, 1.8, 60.9];
+  // Below this the overview hexagons show; roads fade in over the next 1.5 zooms
+  const HANDOFF_ZOOM = 8;
 
-  const params = new URLSearchParams(location.search);
-  // `pipeline.run publish` rewrites this to the versioned file it uploads
+  const query = new URLSearchParams(location.search);
+  // `pipeline.run publish` rewrites these two to the versioned files it uploads
   const DEFAULT_TILES = "uk.pmtiles";
-  const tilesUrl = params.get("tiles") || DEFAULT_TILES;
+  const DEFAULT_OVERVIEW = "uk.overview.json";
+  const tilesUrl = query.get("tiles") || DEFAULT_TILES;
+  const overviewUrl = query.has("overview") ? query.get("overview") : DEFAULT_OVERVIEW;
+
+  // Filter state lives in the URL hash next to MapLibre's map=zoom/lat/lng, so a
+  // shared link opens the same view. Values are plain tokens, so no encoding.
+  function readHash() {
+    return new Map(location.hash.slice(1).split("&").filter(Boolean).map(kv => {
+      const i = kv.indexOf("=");
+      return i < 0 ? [kv, ""] : [kv.slice(0, i), kv.slice(i + 1)];
+    }));
+  }
+  function writeHash(updates) {
+    const pairs = readHash();
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === "") pairs.delete(k); else pairs.set(k, v);
+    }
+    const hash = [...pairs].map(([k, v]) => `${k}=${v}`).join("&");
+    history.replaceState(null, "", hash ? `#${hash}` : location.pathname + location.search);
+  }
+  const initial = readHash();
+  const state = {
+    hidden: new Set((initial.get("hide") || "").split(",").filter(Boolean)),  // "0".."5", "none"
+    type: ["roads", "major"].includes(initial.get("type")) ? initial.get("type") : "all",
+    palette: initial.get("palette") === "cvd" ? "cvd" : "classic",
+  };
 
   // Ages are worked out against today's date in the browser, so the
   // tiles never need rebuilding just because time has passed.
   const now = new Date();
   const nowMonthIndex = now.getFullYear() * 12 + now.getMonth();
   const ageMonths = ["-", nowMonthIndex, ["get", "m"]];
+  const bandIndex = ["step", ageMonths, 0, ...BANDS.slice(0, -1).flatMap((b, i) => [b.maxMonths, i + 1])];
+  const colorFor = palette => ["step", ageMonths, palette[0],
+    ...BANDS.slice(0, -1).flatMap((b, i) => [b.maxMonths, palette[i + 1]])];
 
-  const colorExpr = ["step", ageMonths, AGE_BANDS[0].color];
-  AGE_BANDS.slice(0, -1).forEach((band, i) => colorExpr.push(band.maxMonths, AGE_BANDS[i + 1].color));
-
-  const MAJOR = ["motorway", "trunk", "primary", "secondary",
-                 "motorway_link", "trunk_link", "primary_link", "secondary_link"];
   const isMajor = ["in", ["get", "hw"], ["literal", MAJOR]];
   const widthExpr = ["interpolate", ["linear"], ["zoom"],
     6, ["case", isMajor, 0.6, 0.2],
@@ -89,10 +218,37 @@
     15, ["case", isMajor, 5, 3],
     18, ["case", isMajor, 10, 6]];
 
-  document.getElementById("legend").innerHTML =
-    AGE_BANDS.map(b => `<li><span class="swatch" style="background:${b.color}"></span>${b.label}</li>`).join("") +
-    `<li><span class="swatch dashed"></span>No Google imagery</li>`;
+  function typeFilter() {
+    if (state.type === "major") return isMajor;
+    if (state.type === "roads") return ["!", ["in", ["get", "hw"], ["literal", [...PATHS, "service"]]]];
+    return true;
+  }
+  function visibleBands() {
+    return BANDS.map((_, i) => i).filter(i => !state.hidden.has(String(i)));
+  }
 
+  // --- Legend, doubling as the "in view" breakdown --------------------------
+  const legend = document.getElementById("legend");
+  const rows = [...BANDS.map((b, i) => ({ key: String(i), label: b.label })),
+                { key: "none", label: "No Google imagery" }];
+  legend.innerHTML = rows.map(r => `
+    <li><button type="button" data-key="${r.key}" aria-pressed="${!state.hidden.has(r.key)}">
+      <span class="swatch${r.key === "none" ? " dashed" : ""}"></span>
+      <span class="label">${r.label}</span>
+      <span class="pct"></span>
+      <span class="bar"><span></span></span>
+    </button></li>`).join("");
+
+  function paintLegend() {
+    const palette = PALETTES[state.palette];
+    legend.querySelectorAll("button").forEach(btn => {
+      const color = btn.dataset.key === "none" ? NO_IMAGERY_COLOR : palette[Number(btn.dataset.key)];
+      btn.querySelector(".swatch").style.background = color;
+      btn.querySelector(".bar span").style.background = color;
+    });
+  }
+
+  // --- Map -------------------------------------------------------------------
   const protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
 
@@ -100,42 +256,245 @@
     container: "map",
     style: "https://tiles.openfreemap.org/styles/positron",
     center: [-3.2, 54.6],
-    zoom: 6,  // tiles start at zoom 6
-    hash: true,
+    zoom: 6,
+    hash: "map",
+    attributionControl: {
+      compact: true,
+      customAttribution: 'Search: <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a>',
+    },
   });
-  map.addControl(new maplibregl.NavigationControl(), "bottom-right");
+  map.addControl(new maplibregl.NavigationControl(), "top-right");
+  map.addControl(new maplibregl.GeolocateControl({ fitBoundsOptions: { maxZoom: 15 } }), "top-right");
 
-  map.on("load", () => {
+  let overview = null;     // the overview GeoJSON, or null if there isn't one
+  let statsCells = [];     // resolution-6 hexagons, for the "in view" numbers
+
+  async function loadOverview() {
+    if (!overviewUrl) return null;
+    try {
+      const resp = await fetch(new URL(overviewUrl, location.href));
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
+    } catch (err) {
+      console.warn("No overview, showing roads at every zoom:", err);
+      return null;
+    }
+  }
+
+  function applyStyle() {
+    const palette = PALETTES[state.palette];
+    const shown = ["literal", visibleBands()];
+    // Filter before colour, so the colour rule never sees roads without a date
+    map.setFilter("imagery", ["all", ["==", ["get", "cov"], "google"], ["in", bandIndex, shown], typeFilter()]);
+    map.setPaintProperty("imagery", "line-color", colorFor(palette));
+    map.setFilter("no-imagery", ["all", ["!=", ["get", "cov"], "google"], typeFilter()]);
+    map.setLayoutProperty("no-imagery", "visibility", state.hidden.has("none") ? "none" : "visible");
+    if (overview) {
+      const hexColor = ["case", ["==", ["get", "m"], null], NO_IMAGERY_COLOR, colorFor(palette)];
+      // A hexagon shows if the band of its median is on (or "no imagery" is on, for those without any)
+      const hexShown = ["case", ["==", ["get", "m"], null], !state.hidden.has("none"), ["in", bandIndex, shown]];
+      for (const id of ["hex-coarse", "hex-fine"]) {
+        map.setFilter(id, ["all", ["==", ["get", "r"], id === "hex-coarse" ? 5 : 6], hexShown]);
+        map.setPaintProperty(id, "fill-color", hexColor);
+      }
+    }
+    paintLegend();
+  }
+
+  map.on("load", async () => {
+    overview = await loadOverview();
     const firstLabel = map.getStyle().layers.find(l => l.type === "symbol")?.id;
+
+    // With an overview, roads start at the handoff zoom, so no road tiles are
+    // fetched for the zoomed-out view at all
+    const roadMinZoom = overview ? HANDOFF_ZOOM : 0;
+    const roadOpacity = overview
+      ? ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, 0, HANDOFF_ZOOM + 1.5, 1] : 1;
+
     map.addSource("roads", {
       type: "vector",
       url: `pmtiles://${new URL(tilesUrl, location.href)}`,
       attribution: "Imagery dates: Google Street View",
     });
+    if (overview) {
+      map.addSource("hex", { type: "geojson", data: overview });
+      const hexOpacity = ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, 0.7, HANDOFF_ZOOM + 1.5, 0];
+      map.addLayer({ id: "hex-coarse", type: "fill", source: "hex", maxzoom: 6.5,
+                     paint: { "fill-opacity": 0.7, "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
+      map.addLayer({ id: "hex-fine", type: "fill", source: "hex", minzoom: 6.5, maxzoom: HANDOFF_ZOOM + 1.5,
+                     paint: { "fill-opacity": hexOpacity, "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
+      // Centre of each hexagon: the mean of its six corners
+      statsCells = overview.features.filter(f => f.properties.r === 6).map(f => {
+        const ring = f.geometry.coordinates[0].slice(0, -1);
+        return { ...f.properties, x: ring.reduce((s, p) => s + p[0], 0) / ring.length,
+                 y: ring.reduce((s, p) => s + p[1], 0) / ring.length };
+      });
+      if (overview.built) {
+        const [y, m] = overview.built.split("-").map(Number);
+        const when = new Date(y, m - 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+        document.getElementById("as-of").textContent =
+          `Imagery dates checked ${when}. Hexagons are coloured by the median capture date of their roads.`;
+      }
+    }
     map.addLayer({
-      id: "no-imagery",
-      type: "line",
-      source: "roads",
-      "source-layer": "roads",
-      filter: ["!=", ["get", "cov"], "google"],
-      paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [2, 1.5] },
+      id: "no-imagery", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
+      paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [2, 1.5],
+               "line-opacity": roadOpacity },
       layout: { "line-cap": "butt" },
     }, firstLabel);
     map.addLayer({
-      id: "imagery",
-      type: "line",
-      source: "roads",
-      "source-layer": "roads",
+      id: "imagery", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
       filter: ["==", ["get", "cov"], "google"],
-      paint: { "line-color": colorExpr, "line-width": widthExpr },
+      paint: { "line-width": widthExpr, "line-opacity": roadOpacity },
       layout: { "line-cap": "round", "line-join": "round" },
     }, firstLabel);
+
+    for (const id of ["imagery", "no-imagery", "hex-coarse", "hex-fine"].filter(l => map.getLayer(l))) {
+      map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
+      map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
+    }
+    applyStyle();
+    updateInView();
   });
 
-  document.getElementById("show-none").addEventListener("change", e => {
-    map.setLayoutProperty("no-imagery", "visibility", e.target.checked ? "visible" : "none");
+  // --- "In view" numbers ---------------------------------------------------
+  const fmt = new Intl.NumberFormat("en-GB", { maximumFractionDigits: 0 });
+
+  function updateInView() {
+    const target = document.getElementById("in-view");
+    if (!statsCells.length) {
+      target.textContent = "";
+      legend.querySelectorAll(".pct").forEach(el => { el.textContent = ""; });
+      return;
+    }
+    const bounds = map.getBounds();
+    let cells = statsCells.filter(c => bounds.contains([c.x, c.y]));
+    let where = "In view";
+    if (!cells.length) {
+      // Zoomed in closer than one hexagon: use the one nearest the centre
+      const { lng, lat } = map.getCenter();
+      const dist = c => (c.x - lng) ** 2 + (c.y - lat) ** 2;
+      cells = [statsCells.reduce((a, b) => (dist(a) <= dist(b) ? a : b))];
+      where = "Around here";
+    }
+    const totals = { k: 0, n: 0, o: 0, b: BANDS.map(() => 0) };
+    for (const c of cells) {
+      totals.k += c.k; totals.n += c.n; totals.o += c.o;
+      totals.b.forEach((_, i) => { totals.b[i] += c[`b${i}`]; });
+    }
+    target.innerHTML = `${where}: <strong>${fmt.format(totals.k)} km</strong> of road and path` +
+      (state.type === "all" ? "" : '<br><span class="small">Shares cover all ways, not just the filter.</span>');
+    const share = key => (key === "none" ? totals.n + totals.o : totals.b[Number(key)]) / (totals.k || 1);
+    legend.querySelectorAll("button").forEach(btn => {
+      const pct = share(btn.dataset.key) * 100;
+      btn.querySelector(".pct").textContent = pct >= 0.5 || pct === 0 ? `${Math.round(pct)}%` : "<1%";
+      btn.querySelector(".bar span").style.width = `${pct}%`;
+    });
+  }
+  map.on("moveend", updateInView);
+
+  // --- Controls --------------------------------------------------------------
+  legend.addEventListener("click", e => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const key = btn.dataset.key;
+    if (state.hidden.has(key)) state.hidden.delete(key); else state.hidden.add(key);
+    btn.setAttribute("aria-pressed", String(!state.hidden.has(key)));
+    writeHash({ hide: [...state.hidden].join(",") });
+    applyStyle();
   });
 
+  const roadType = document.getElementById("road-type");
+  roadType.value = state.type;
+  roadType.addEventListener("change", () => {
+    state.type = roadType.value;
+    writeHash({ type: state.type === "all" ? null : state.type });
+    applyStyle();
+    updateInView();
+  });
+
+  const cvd = document.getElementById("cvd");
+  cvd.checked = state.palette === "cvd";
+  cvd.addEventListener("change", () => {
+    state.palette = cvd.checked ? "cvd" : "classic";
+    writeHash({ palette: cvd.checked ? "cvd" : null });
+    applyStyle();
+  });
+  paintLegend();
+
+  const panel = document.getElementById("panel");
+  const toggle = document.getElementById("toggle-panel");
+  function setPanelOpen(open) {
+    panel.classList.toggle("closed", !open);
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.textContent = open ? "Hide" : "Show legend";
+  }
+  toggle.addEventListener("click", () => setPanelOpen(panel.classList.contains("closed")));
+  // Start closed on phones so the map is visible
+  setPanelOpen(!window.matchMedia("(max-width: 640px)").matches);
+
+  // --- Place search (Photon: free OpenStreetMap geocoder) ---------------------
+  const input = document.getElementById("search-input");
+  const results = document.getElementById("search-results");
+  let found = [], active = -1, pending = null, timer = null;
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function showResults() {
+    results.hidden = !found.length;
+    results.innerHTML = found.map((f, i) => {
+      const p = f.properties;
+      const detail = [p.city, p.county, p.postcode].filter(x => x && x !== p.name).join(", ");
+      return `<li role="option" id="result-${i}" aria-selected="${i === active}" data-i="${i}">
+        ${escapeHtml(p.name || p.street || "Unnamed")}<br><span class="muted">${escapeHtml(detail)}</span></li>`;
+    }).join("");
+    input.setAttribute("aria-activedescendant", active >= 0 ? `result-${active}` : "");
+  }
+  function choose(i) {
+    const f = found[i];
+    if (!f) return;
+    const e = f.properties.extent;  // [west, north, east, south]
+    if (e) map.fitBounds([[e[0], e[3]], [e[2], e[1]]], { maxZoom: 15, padding: 40 });
+    else map.flyTo({ center: f.geometry.coordinates, zoom: 14 });
+    input.value = f.properties.name || "";
+    found = []; active = -1; showResults();
+    if (window.matchMedia("(max-width: 640px)").matches) setPanelOpen(false);
+  }
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (q.length < 3) { found = []; showResults(); return; }
+    // Wait for a pause in typing, and cancel any request still in flight
+    timer = setTimeout(async () => {
+      pending?.abort();
+      pending = new AbortController();
+      const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=en&bbox=${UK_BBOX.join(",")}`;
+      try {
+        const resp = await fetch(url, { signal: pending.signal });
+        found = (await resp.json()).features || [];
+        active = -1;
+        showResults();
+      } catch (err) {
+        if (err.name !== "AbortError") console.warn("Search failed:", err);
+      }
+    }, 300);
+  });
+  input.addEventListener("keydown", e => {
+    if (e.key === "ArrowDown" && found.length) { active = (active + 1) % found.length; showResults(); e.preventDefault(); }
+    else if (e.key === "ArrowUp" && found.length) { active = (active - 1 + found.length) % found.length; showResults(); e.preventDefault(); }
+    else if (e.key === "Escape") { found = []; showResults(); }
+  });
+  document.getElementById("search").addEventListener("submit", e => {
+    e.preventDefault();
+    choose(active >= 0 ? active : 0);
+  });
+  results.addEventListener("click", e => {
+    const li = e.target.closest("li");
+    if (li) choose(Number(li.dataset.i));
+  });
+
+  // --- Popups ----------------------------------------------------------------
   function describeAge(months) {
     if (months < 1) return "this month";
     const y = Math.floor(months / 12), m = months % 12;
@@ -144,36 +503,40 @@
     if (m) parts.push(`${m} month${m > 1 ? "s" : ""}`);
     return parts.join(" ") + " ago";
   }
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  function monthName(index) {
+    return new Date(Math.floor(index / 12), index % 12)
+      .toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   }
 
   map.on("click", e => {
-    const f = map.queryRenderedFeatures(e.point, { layers: ["imagery", "no-imagery"] })[0];
+    const layers = ["imagery", "no-imagery", "hex-coarse", "hex-fine"].filter(id => map.getLayer(id));
+    const f = map.queryRenderedFeatures(e.point, { layers })[0];
     if (!f) return;
     const p = f.properties;
-    const title = escapeHtml(p.name || p.hw.replace(/_/g, " "));
-    let body;
-    if (p.cov === "google") {
-      const [y, mo] = p.ym.split("-").map(Number);
-      const when = new Date(y, mo - 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
-      body = `Captured ${when} (${describeAge(nowMonthIndex - p.m)})`;
+    let html;
+    if (f.layer.id.startsWith("hex")) {
+      const covered = p.k ? Math.round(100 * (p.k - p.n - p.o) / p.k) : 0;
+      const median = p.m === null || p.m === undefined || p.m === "null"
+        ? "No Google imagery" : `Median capture ${monthName(Number(p.m))} (${describeAge(nowMonthIndex - Number(p.m))})`;
+      html = `<h2>This area</h2><div>${median}</div>
+        <div>${fmt.format(p.k)} km of road and path, ${covered}% with Google imagery</div>
+        <div class="muted">Zoom in to see individual roads.</div>`;
     } else {
-      body = p.cov === "other" ? "Only user-contributed photos here" : "No Street View imagery found";
+      const title = escapeHtml(p.name || p.hw.replace(/_/g, " "));
+      let body;
+      if (p.cov === "google") {
+        const [y, mo] = p.ym.split("-").map(Number);
+        const when = new Date(y, mo - 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+        body = `Captured ${when} (${describeAge(nowMonthIndex - p.m)})`;
+      } else {
+        body = p.cov === "other" ? "Only user-contributed photos here" : "No Street View imagery found";
+      }
+      const { lat, lng } = e.lngLat;
+      const svUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat.toFixed(6)},${lng.toFixed(6)}`;
+      html = `<h2>${title}</h2><div>${body}</div><a href="${svUrl}" target="_blank" rel="noopener">Open in Street View →</a>`;
     }
-    const { lat, lng } = e.lngLat;
-    const svUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat.toFixed(6)},${lng.toFixed(6)}`;
-    new maplibregl.Popup()
-      .setLngLat(e.lngLat)
-      .setHTML(`<h2>${title}</h2><div>${body}</div><a href="${svUrl}" target="_blank" rel="noopener">Open in Street View →</a>`)
-      .addTo(map);
+    new maplibregl.Popup({ maxWidth: "260px" }).setLngLat(e.lngLat).setHTML(html).addTo(map);
   });
-
-  for (const layer of ["imagery", "no-imagery"]) {
-    map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
-    map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
-  }
 </script>
 </body>
 </html>
