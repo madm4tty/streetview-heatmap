@@ -11,7 +11,8 @@ A monthly batch job builds two static files: a PMTiles map file and one HTML pag
 2. Sample each road against the Street View metadata API by bisection: check both ends of a stretch, and only
    look in between when they disagree. Only car imagery (`© Google`) counts as dated.
 3. Cache every lookup in SQLite, so interrupted runs resume and monthly refreshes only re-check what changed.
-4. Build vector tiles with tippecanoe and show them on a MapLibre page.
+4. Build vector tiles with tippecanoe, plus a hexagon overview for zoomed-out views, and show them on a MapLibre
+   page with an "in view" breakdown, filters, place search and a colour-blind friendly palette.
 5. Upload to Cloudflare R2, shared by an unlisted link.
 
 The UK is 1.17 million km of OSM ways: 13–17 million free lookups and 10–12 hours for the first full build,

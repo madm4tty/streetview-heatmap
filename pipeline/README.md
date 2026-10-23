@@ -28,7 +28,7 @@ The key needs the **Street View Static API** enabled. Metadata lookups are free 
 # Full area and map
 .venv/bin/python -m pipeline.run sample --area leeds --mode bisect --max-calls 150000
 .venv/bin/python -m pipeline.run tiles  --area leeds --mode bisect
-.venv/bin/python -m pipeline.serve        # http://localhost:8000/?tiles=leeds.pmtiles (the page defaults to uk.pmtiles)
+.venv/bin/python -m pipeline.serve        # http://localhost:8000/?tiles=leeds.pmtiles&overview=leeds.overview.json
 ```
 
 Every lookup is cached in `pipeline/data/<area>.cache.sqlite`, including "no imagery" answers.
@@ -70,6 +70,27 @@ Leeds trial (2026-10-21, forced with `--max-age-days 0` on the same day as the f
 
 **Limitation:** a new capture that skips a cell's sentinel road isn't detected until a later refresh or a full re-sample.
 A full re-sample once a year is a cheap safety net, at about 115k free calls for Leeds.
+
+## The map page
+
+`pipeline/web/index.html` is a single static page (MapLibre plus the PMTiles plugin, no build step):
+
+- **Overview hexagons** at low zoom: H3 cells of about 250 km² (below zoom 6.5) and 36 km² (up to zoom 9.5), coloured
+  by the median capture date of their roads. Roads fade in from zoom 8 to 9.5, and no road tiles are fetched below
+  zoom 8. `tiles` writes each area's hexagon tallies (`<area>.hexstats.json`); for the UK, `overview --area uk` merges
+  the shards' tallies into `uk.overview.json` (about 0.5 MB compressed).
+- **"In view" panel**: the legend rows show each age band's share of road length in the current view, from the
+  hexagons whose centres are on screen. Clicking a row hides or shows that band. Shares are as of the build month and
+  always cover all ways.
+- **Filters**: all ways, roads only (no paths, tracks or service roads), or major roads.
+- **Colour-blind friendly colours**: a single-hue blue ramp that passes the ordinal palette checks against the base
+  map. The default green-to-red palette fails them (lime and green are too close even with normal colour vision).
+- **Place search** with [Photon](https://photon.komoot.io) (free OpenStreetMap geocoder, limited to the UK), and a
+  locate-me button.
+- **Shareable links**: map position and filters live in the URL hash (`#map=…&hide=5,none&type=major&palette=cvd`).
+- **Phones**: the panel becomes a drawer along the bottom, closed to start with.
+
+Band edges (6, 12, 36, 60, 120 months) are defined in both `pipeline/overview.py` and the page; keep them in step.
 
 ## Hosting
 

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pipeline import areas, measure, publish, shards
+from pipeline import areas, measure, overview, publish, shards
 from pipeline.cache import Lookup, MetadataCache, make_key
 from pipeline.export import agreement_by_length, month_index, piece_properties
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
@@ -284,7 +284,8 @@ class FakeR2:
             f.write(self.objects[key]["Body"])
 
 
-PAGE = '<script>\n  const DEFAULT_TILES = "leeds.pmtiles";\n</script>\n'
+PAGE = ('<script>\n  const DEFAULT_TILES = "leeds.pmtiles";\n'
+        '  const DEFAULT_OVERVIEW = "leeds.overview.json";\n</script>\n')
 
 
 def _site(tmp_path, area="leeds"):
@@ -520,3 +521,82 @@ class TestStorageGuard:
                 return {"Contents": [{"Key": "b"}], "IsTruncated": False}
 
         assert [o["Key"] for o in publish.list_objects(Paged(), "b")] == ["a", "b"]
+
+
+class TestOverview:
+    # Two points about 100 m apart in Leeds: same resolution-6 hexagon
+    LEEDS_A, LEEDS_B = (53.8, -1.55), (53.8, -1.5485)
+
+    def test_band_edges_match_the_map(self):
+        # MapLibre's "step": an age equal to an edge belongs to the older band
+        assert [overview.band_of(a) for a in (0, 5, 6, 11, 12, 35, 36, 60, 119, 120, 300)] == \
+            [0, 0, 1, 1, 2, 2, 3, 4, 4, 5, 5]
+
+    def test_hex_stats_merge_across_shards(self):
+        a = overview.hex_stats([(*self.LEEDS_A, 100.0, "2024-01")])
+        b = overview.hex_stats([(*self.LEEDS_B, 50.0, "2024-01"), (*self.LEEDS_B, 30.0, NO_COVERAGE)])
+        merged = overview.merge_stats([a, b])
+        assert len(merged) == 1
+        assert list(merged.values())[0] == {"2024-01": 150.0, NO_COVERAGE: 30.0}
+
+    def test_summarise_bands_and_median(self):
+        built = overview.month_index("2026-10")
+        props = overview.summarise(
+            {"2026-08": 1000, "2020-01": 3000, NO_COVERAGE: 500, NON_GOOGLE: 500}, built)
+        assert props["b0"] == 1.0 and props["b4"] == 3.0   # 2 months; 6 years 9 months
+        assert props["n"] == 0.5 and props["o"] == 0.5 and props["k"] == 5.0
+        assert props["m"] == overview.month_index("2020-01")  # most of the length
+
+    def test_no_google_imagery_has_no_median(self):
+        assert overview.summarise({NO_COVERAGE: 100}, 24000)["m"] is None
+
+    def test_weighted_median(self):
+        assert overview.weighted_median([(1, 1.0), (2, 1.0), (3, 5.0)]) == 3
+        assert overview.weighted_median([]) is None
+
+    def test_build_overview_has_both_resolutions(self):
+        stats = overview.hex_stats([(*self.LEEDS_A, 100.0, "2024-01")])
+        fc = overview.build_overview(stats, "2026-10")
+        assert fc["built"] == "2026-10"
+        assert sorted(f["properties"]["r"] for f in fc["features"]) == [5, 6]
+        ring = fc["features"][0]["geometry"]["coordinates"][0]
+        assert ring[0] == ring[-1] and len(ring) == 7  # closed hexagon
+        lng, lat = ring[0]
+        assert lng == pytest.approx(-1.55, abs=0.05) and lat == pytest.approx(53.8, abs=0.05)
+
+    def test_piece_points_use_piece_middle(self):
+        seg = _road()
+        (lat, lon, length, value), = overview.piece_points([Piece("r_0", 0, 200, "2024-01")], [seg])
+        assert length == 200 and value == "2024-01"
+        assert haversine_m(START, (lat, lon)) == pytest.approx(100, abs=1)
+
+
+class TestPublishOverview:
+    NOW = datetime(2026, 10, 22, 10, 45, 30, tzinfo=timezone.utc)
+    PREFIX = "k7f3q9x2v8m1w4z6"
+
+    def test_uploads_overview_and_points_page_at_it(self, tmp_path):
+        site = _site(tmp_path)
+        (tmp_path / "leeds.overview.json").write_text('{"type":"FeatureCollection"}')
+        client = FakeR2()
+        publish.publish_site(client, "site", self.PREFIX, "leeds", site, now=self.NOW)
+        stem = f"{self.PREFIX}/tiles/leeds-20261022-104530"
+        assert client.calls == [("upload", f"{stem}.pmtiles"), ("upload", f"{stem}.overview.json"),
+                                ("put", f"{self.PREFIX}/index.html")]
+        assert client.objects[f"{stem}.overview.json"]["ContentType"] == "application/json"
+        body = client.objects[f"{self.PREFIX}/index.html"]["Body"]
+        assert b'DEFAULT_OVERVIEW = "tiles/leeds-20261022-104530.overview.json"' in body
+
+    def test_without_overview_page_gets_none(self, tmp_path):
+        client = FakeR2()
+        publish.publish_site(client, "site", self.PREFIX, "leeds", _site(tmp_path), now=self.NOW)
+        assert b'DEFAULT_OVERVIEW = "";' in client.objects[f"{self.PREFIX}/index.html"]["Body"]
+
+    def test_prunes_whole_versions(self, tmp_path):
+        p = self.PREFIX
+        old = {f"{p}/tiles/leeds-20260801-000000.{ext}": {"Body": b""} for ext in ("pmtiles", "overview.json")}
+        mid = {f"{p}/tiles/leeds-20260901-000000.pmtiles": {"Body": b""}}
+        client = FakeR2({**old, **mid})
+        publish.publish_site(client, "site", p, "leeds", _site(tmp_path), now=self.NOW)
+        assert not any(k in client.objects for k in old)
+        assert all(k in client.objects for k in mid)

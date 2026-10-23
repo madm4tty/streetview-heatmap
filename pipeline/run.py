@@ -26,7 +26,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
-from pipeline import areas, measure, publish
+from pipeline import areas, measure, overview, publish
 from pipeline.cache import Key, MetadataCache
 from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces,
                              save_pieces, write_geojsonseq)
@@ -210,9 +210,40 @@ def cmd_compare(args) -> None:
         print(f"  disagree ({kind}): {km} km")
 
 
+def hexstats_path(area: str) -> str:
+    return os.path.join(DATA_DIR, f"{area}.hexstats.json")
+
+
+def overview_path(area: str) -> str:
+    return os.path.join(SITE_DIR, f"{area}.overview.json")
+
+
+def write_overview(area: str, parts: List[str]) -> None:
+    built = datetime.now(timezone.utc).strftime("%Y-%m")
+    stats = overview.merge_stats(overview.load_json(p) for p in parts)
+    os.makedirs(SITE_DIR, exist_ok=True)
+    overview.save_json(overview.build_overview(stats, built), overview_path(area))
+    logger.info("Wrote %s (%d hexagons)", overview_path(area), len(stats))
+
+
+def cmd_overview(args) -> None:
+    spec = areas.get_area(args.area)
+    parts = [hexstats_path(a) for a in spec.get("shards", [args.area])]
+    missing = [p for p in parts if not os.path.exists(p)]
+    if missing:
+        raise SystemExit(f"Missing {', '.join(missing)}. Run `tiles` for those areas first.")
+    write_overview(args.area, parts)
+
+
 def cmd_tiles(args) -> None:
     segments = load_area_segments(args.area)
     pieces = load_pieces(pieces_path(args.area, args.mode))
+    # Hexagon tallies: merged across shards later for the UK, or straight into
+    # this area's overview otherwise
+    overview.save_json(overview.hex_stats(overview.piece_points(pieces, segments)),
+                       hexstats_path(args.area))
+    if "cells" not in areas.get_area(args.area):
+        write_overview(args.area, [hexstats_path(args.area)])
     os.makedirs(SITE_DIR, exist_ok=True)
     geojsonseq = os.path.join(DATA_DIR, f"{args.area}.geojsonl")
     n = write_geojsonseq(pieces, segments, geojsonseq)
@@ -267,7 +298,7 @@ def main(argv=None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name in ("download", "estimate", "sample", "compare", "tiles", "refresh",
-                 "publish", "pull-state", "push-state"):
+                 "publish", "pull-state", "push-state", "overview"):
         p = sub.add_parser(name)
         p.add_argument("--area", required=True, choices=sorted(areas.AREAS))
         if name in ("sample", "tiles"):
@@ -306,7 +337,8 @@ def main(argv=None) -> None:
     {"download": cmd_download, "estimate": cmd_estimate, "sample": cmd_sample,
      "compare": cmd_compare, "tiles": cmd_tiles, "refresh": cmd_refresh,
      "publish": cmd_publish, "pull-state": cmd_pull_state,
-     "push-state": cmd_push_state, "measure": cmd_measure}[args.command](args)
+     "push-state": cmd_push_state, "measure": cmd_measure,
+     "overview": cmd_overview}[args.command](args)
 
 
 if __name__ == "__main__":

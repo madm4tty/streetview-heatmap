@@ -22,6 +22,7 @@ python3 -m pipeline.serve                               # local preview with Ran
 python3 -m pipeline.run publish  --area leeds           # upload to R2
 python3 -m pipeline.run pull-state / push-state --area leeds
 python3 -m pipeline.run measure  --pbf <extract>         # size up an extract, no API calls
+python3 -m pipeline.run overview --area uk              # merge shard hexagon tallies into the overview
 # UK: areas uk-1 … uk-10 are sampled and tiled separately, merged with tile-join, published as --area uk
 ```
 
@@ -37,8 +38,9 @@ python3 -m pipeline.run measure  --pbf <extract>         # size up an extract, n
 - `pipeline/cache.py`: SQLite lookup cache keyed on integer micro-degrees
 - `pipeline/refresh.py`: monthly refresh via one sentinel per 250 m cell
 - `pipeline/export.py`: GeoJSONSeq and tippecanoe
+- `pipeline/overview.py`: H3 hexagon tallies per area, merged into the overview the page shows at low zoom
 - `pipeline/publish.py`: R2 upload under a secret prefix, and state sync
-- `pipeline/web/index.html`: MapLibre page; `const DEFAULT_TILES` is rewritten by `publish`
+- `pipeline/web/index.html`: MapLibre page; `DEFAULT_TILES` and `DEFAULT_OVERVIEW` are rewritten by `publish`
 - `pipeline/data/`: downloads, cache and build output (gitignored)
 
 ## Conventions
