@@ -183,6 +183,18 @@
 
   // Filter state lives in the URL hash next to MapLibre's map=zoom/lat/lng, so a
   // shared link opens the same view. Values are plain tokens, so no encoding.
+  // Links from before filters were added have a bare "#zoom/lat/lng". Turn that
+  // into map=zoom/lat/lng so they still open in the right place, and drop any
+  // other stray part without a "=".
+  (function tidyHash() {
+    const parts = location.hash.slice(1).split("&").filter(Boolean);
+    const old = parts.find(kv => /^[\d.]+\/-?[\d.]+\/-?[\d.]+$/.test(kv.replace(/=$/, "")));
+    const kept = parts.filter(kv => kv.includes("=") && !kv.endsWith("="));
+    if (old && !kept.some(kv => kv.startsWith("map="))) kept.unshift(`map=${old.replace(/=$/, "")}`);
+    if (kept.length !== parts.length || old) {
+      history.replaceState(null, "", kept.length ? `#${kept.join("&")}` : location.pathname + location.search);
+    }
+  })();
   function readHash() {
     return new Map(location.hash.slice(1).split("&").filter(Boolean).map(kv => {
       const i = kv.indexOf("=");
@@ -616,7 +628,12 @@
         body = p.cov === "other" ? "Only user-contributed photos here" : "No Street View imagery found";
       }
       const { lat, lng } = e.lngLat;
-      const svUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat.toFixed(6)},${lng.toFixed(6)}`;
+      // Open the panorama this stretch is dated by. Given only a point, Google
+      // Maps picks its own panorama nearby, which can be a different, broken
+      // one; the viewpoint is its fallback if the panorama can't be found.
+      const svUrl = "https://www.google.com/maps/@?api=1&map_action=pano" +
+        (p.pano ? `&pano=${encodeURIComponent(p.pano)}` : "") +
+        `&viewpoint=${lat.toFixed(6)},${lng.toFixed(6)}`;
       html = `<h2>${title}</h2><div>${body}</div><a href="${svUrl}" target="_blank" rel="noopener">Open in Street View →</a>`;
     }
     new maplibregl.Popup({ maxWidth: "260px" }).setLngLat(e.lngLat).setHTML(html).addTo(map);

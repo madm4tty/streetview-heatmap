@@ -29,7 +29,7 @@ from typing import Dict, List, Optional
 
 from pipeline import areas, measure, overview, publish
 from pipeline.cache import Key, MetadataCache
-from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces,
+from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces, piece_panos,
                              save_pieces, write_geojsonseq)
 from pipeline.refresh import refresh
 from pipeline.roads import iter_segments, load_segments
@@ -258,7 +258,15 @@ def cmd_tiles(args) -> None:
         write_overview(args.area, [hexstats_path(args.area)])
     os.makedirs(SITE_DIR, exist_ok=True)
     geojsonseq = os.path.join(DATA_DIR, f"{args.area}.geojsonl")
-    n = write_geojsonseq(pieces, segments, geojsonseq)
+    panos = None
+    if os.path.exists(cache_path(args.area)):
+        cache = MetadataCache(cache_path(args.area))
+        try:
+            panos = piece_panos(pieces, segments, cache)
+        finally:
+            cache.close()
+        logger.info("Panorama IDs for %d of %d pieces", sum(1 for x in panos if x), len(pieces))
+    n = write_geojsonseq(pieces, segments, geojsonseq, panos)
     logger.info("Wrote %d features to %s", n, geojsonseq)
     pmtiles = os.path.join(SITE_DIR, f"{args.area}.pmtiles")
     build_pmtiles(geojsonseq, pmtiles)

@@ -6,12 +6,13 @@ import shutil
 import subprocess
 from collections import defaultdict
 from dataclasses import asdict
-from typing import Dict, List
+from typing import Dict, List, Optional, Sequence
 
+from pipeline.cache import MetadataCache
 from pipeline.geo import sub_line
 from pipeline.roads import Segment
-from pipeline.sampler import Piece
-from pipeline.streetview import NO_COVERAGE, NON_GOOGLE
+from pipeline.sampler import END_INSET_M, Piece, key_at
+from pipeline.streetview import NO_COVERAGE, NON_GOOGLE, classify
 
 logger = logging.getLogger(__name__)
 
@@ -35,21 +36,57 @@ def piece_properties(segment: Segment, value: str) -> Dict:
     return props
 
 
-def write_geojsonseq(pieces: List[Piece], segments: List[Segment], path: str) -> int:
+def _sample_points(seg: Segment, piece: Piece) -> List[float]:
+    """Where bisection looked up this piece's value: its ends (inset from the
+    segment's ends, as sampled) or, on a very short segment, the middle."""
+    lo, hi = END_INSET_M, seg.length - END_INSET_M
+    if hi <= lo:
+        return [seg.length / 2]
+    ends = [min(max(piece.start_m, lo), hi), min(max(piece.end_m, lo), hi)]
+    return ends + [seg.length / 2]
+
+
+def piece_panos(pieces: List[Piece], segments: List[Segment],
+                cache: MetadataCache) -> List[Optional[str]]:
+    """The panorama each piece's date came from, or None.
+
+    Looks up the cached answers at the piece's sample points and takes the
+    first whose panorama has the piece's date. The page links to it directly,
+    so "Open in Street View" shows the imagery the map is dated by rather than
+    whatever Google Maps picks near the tapped point.
+    """
+    by_id = {s.id: s for s in segments}
+    candidates = [[] if p.value in (NO_COVERAGE, NON_GOOGLE) else
+                  [key_at(by_id[p.segment_id], d) for d in _sample_points(by_id[p.segment_id], p)]
+                  for p in pieces]
+    lookups = cache.get_many({k for keys in candidates for k in keys})
+    panos = []
+    for p, keys in zip(pieces, candidates):
+        found = (lookups.get(k) for k in keys)
+        panos.append(next((lk.pano_id for lk in found
+                           if lk and lk.pano_id and classify(lk) == p.value), None))
+    return panos
+
+
+def write_geojsonseq(pieces: List[Piece], segments: List[Segment], path: str,
+                     panos: Optional[Sequence[Optional[str]]] = None) -> int:
     """Write one GeoJSON Feature per line (the format tippecanoe reads fastest)."""
     by_id = {s.id: s for s in segments}
     count = 0
     with open(path, "w") as f:
-        for p in pieces:
+        for i, p in enumerate(pieces):
             seg = by_id[p.segment_id]
             coords = sub_line(seg.coords, seg.cum, p.start_m, p.end_m)
+            props = piece_properties(seg, p.value)
+            if panos and panos[i]:
+                props["pano"] = panos[i]
             feature = {
                 "type": "Feature",
                 "geometry": {
                     "type": "LineString",
                     "coordinates": [[round(lon, 6), round(lat, 6)] for lat, lon in coords],
                 },
-                "properties": piece_properties(seg, p.value),
+                "properties": props,
             }
             f.write(json.dumps(feature, separators=(",", ":")) + "\n")
             count += 1

@@ -91,6 +91,10 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   map. The default green-to-red palette fails them (lime and green are too close even with normal colour vision).
 - **Place search** with [Photon](https://photon.komoot.io) (free OpenStreetMap geocoder, limited to the UK), and a
   locate-me button.
+- **"Open in Street View"** opens the exact panorama the stretch is dated by: `tiles` looks up each piece's
+  panorama ID in the cache (the lookup at one of its sample points that gave its date) and stores it as `pano`.
+  Given only a point, Google Maps picks its own panorama nearby, which can be a different or broken one. Stretches
+  without an ID fall back to the tapped point. The IDs add roughly 18% to the tiles.
 - **Shareable links**: map position and filters live in the URL hash (`#map=…&hide=5,none&type=major&palette=cvd`).
 - **Phones**: the panel becomes a drawer along the bottom, closed to start with.
 
