@@ -87,6 +87,12 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   after each move at zoom 11–12 in central London (on a slow test machine) and a few ms at street level; raise
   `ROAD_STATS_ZOOM` in the page if that ever feels sluggish.
 - **Filters**: all ways, roads only (no paths, tracks or service roads), or major roads.
+- **Private ways**: roads closed to cars (`access`, `vehicle`, `motor_vehicle` or `motorcar` set to `private` or
+  `no`, the most specific tag winning, so bus gates count), driveways (`service=driveway`), and paths where every
+  tagged mode (`foot`, `bicycle`, falling back to `access`) is shut out. Without imagery they're drawn as dots and
+  have their own legend row, "Private, no imagery", instead of counting as gaps in Google's coverage (`pv` in the
+  tiles, `p` in the hexagon tallies). With imagery they're dated as usual and the popup notes the restriction.
+  Sampling is unchanged. Gates (tagged on nodes) aren't read.
 - **Colour-blind safe colours**: the Okabe–Ito set, recent to old: blue, sky blue, bluish green, orange, vermilion,
   wine. Distinct hues chosen to stay apart for colour-blind viewers; passes the categorical palette checks on every
   pair (sky blue and orange are faint on the light base map, which the text labels cover). It replaced a single-hue

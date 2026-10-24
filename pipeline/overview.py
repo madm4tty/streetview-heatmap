@@ -36,18 +36,26 @@ TOP_AREAS = 5
 # top of its real value, so it isn't part of the bands or the total)
 UPDATED = "+new"
 
+# Pseudo-value for private ways without imagery, tallied apart from "none" so
+# the coverage gap counts only roads the Street View car could have used
+PRIVATE = "private"
+
 # hexagon -> value -> metres of road
 HexStats = Dict[str, Dict[str, float]]
 
 
 def piece_points(pieces: Iterable[Piece], segments: Iterable[Segment]
                  ) -> Iterator[Tuple[float, float, float, str]]:
-    """(lat, lon, length in metres, value) at the middle of each piece."""
+    """(lat, lon, length in metres, value) at the middle of each piece.
+
+    A private way without imagery has the value PRIVATE.
+    """
     by_id = {s.id: s for s in segments}
     for p in pieces:
         seg = by_id[p.segment_id]
         lat, lon = point_at(seg.coords, seg.cum, (p.start_m + p.end_m) / 2)
-        yield lat, lon, p.end_m - p.start_m, p.value
+        value = PRIVATE if seg.private and p.value == NO_COVERAGE else p.value
+        yield lat, lon, p.end_m - p.start_m, value
 
 
 def with_updates(points: Iterable[Tuple[float, float, float, str]],
@@ -88,7 +96,7 @@ def band_of(age_months: int) -> int:
 def summarise(values: Dict[str, float], built_index: int) -> Dict:
     """Kilometres per age band (as of the build month), with and without imagery, and the median month."""
     bands = [0.0] * (len(BAND_EDGES_MONTHS) + 1)
-    none = other = 0.0
+    none = other = private = 0.0
     dated: List[Tuple[int, float]] = []
     updated = 0.0
     for value, length in values.items():
@@ -98,6 +106,8 @@ def summarise(values: Dict[str, float], built_index: int) -> Dict:
             none += length
         elif value == NON_GOOGLE:
             other += length
+        elif value == PRIVATE:
+            private += length
         else:
             idx = month_index(value)
             bands[band_of(max(0, built_index - idx))] += length
@@ -105,8 +115,8 @@ def summarise(values: Dict[str, float], built_index: int) -> Dict:
     # Kilometres to one decimal place: plenty for percentages, and the file
     # for the whole UK stays small
     props = {f"b{i}": round(b / 1000, 1) for i, b in enumerate(bands)}
-    props.update(n=round(none / 1000, 1), o=round(other / 1000, 1),
-                 k=round((sum(bands) + none + other) / 1000, 1), m=weighted_median(dated),
+    props.update(n=round(none / 1000, 1), o=round(other / 1000, 1), p=round(private / 1000, 1),
+                 k=round((sum(bands) + none + other + private) / 1000, 1), m=weighted_median(dated),
                  u=round(updated / 1000, 1))
     return props
 

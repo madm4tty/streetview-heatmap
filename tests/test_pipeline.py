@@ -15,7 +15,7 @@ from pipeline.export import (agreement_by_length, month_index, piece_panos, piec
                              updates_since, write_geojsonseq)
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
 from pipeline.refresh import refresh
-from pipeline.roads import Segment, include_way
+from pipeline.roads import Segment, include_way, is_private
 from pipeline.sampler import (PATH_RADIUS_M, ROAD_RADIUS_M, Piece, key_at, merge_pieces,
                               min_bisect_lookups, radius_for, sample_bisect, sample_dense)
 from pipeline.streetview import (NO_COVERAGE, NON_GOOGLE, BudgetExceeded, RateLimiter,
@@ -691,6 +691,44 @@ class TestHistory:
         index.write_text(PAGE)
         page, _, _ = publish.publish_page(client, "site", p, "uk", str(index))
         assert b'DEFAULT_HISTORY = "history/uk.json"' in client.objects[page]["Body"]
+
+
+class TestPrivateWays:
+    @pytest.mark.parametrize("tags, private", [
+        ({"highway": "residential"}, False),
+        ({"highway": "service", "access": "private"}, True),
+        ({"highway": "service", "service": "driveway"}, True),
+        ({"highway": "unclassified", "access": "no", "bus": "yes"}, True),           # bus gate
+        ({"highway": "residential", "access": "private", "motor_vehicle": "yes"}, False),
+        ({"highway": "residential", "motor_vehicle": "destination"}, False),
+        ({"highway": "tertiary", "motor_vehicle": "no"}, True),
+        ({"highway": "footway", "motor_vehicle": "no"}, False),                       # normal for a path
+        ({"highway": "footway", "access": "private"}, True),
+        ({"highway": "footway", "foot": "private"}, True),
+        ({"highway": "cycleway", "access": "no", "bicycle": "designated"}, False),
+        ({"highway": "footway", "access": "no", "foot": "designated"}, False),
+    ])
+    def test_access_rules(self, tags, private):
+        assert is_private(tags) is private
+
+    def test_marked_in_tiles(self):
+        seg = Segment(id="d", highway="service", name=None, coords=[START, END], private=True)
+        assert piece_properties(seg, NO_COVERAGE)["pv"] == 1
+        assert "pv" not in piece_properties(_road(), NO_COVERAGE)
+
+    def test_private_gaps_tallied_apart_from_coverage_gaps(self):
+        public, private = _road("a"), Segment(id="b", highway="service", name=None,
+                                              coords=[START, END], private=True)
+        pieces = [Piece("a", 0, public.length, NO_COVERAGE), Piece("b", 0, 500, NO_COVERAGE),
+                  Piece("b", 500, private.length, "2024-01")]   # imagery on a private road still counts
+        combined = {}
+        for _, _, length, value in overview.piece_points(pieces, [public, private]):
+            combined[value] = combined.get(value, 0) + length
+        summary = overview.summarise(combined, month_index("2026-10"))
+        assert summary["p"] == 0.5
+        assert summary["n"] == pytest.approx(public.length / 1000, abs=0.06)
+        assert summary["k"] == pytest.approx((public.length + private.length) / 1000, abs=0.06)
+        assert summary["b2"] == pytest.approx((private.length - 500) / 1000, abs=0.06)
 
 
 class TestFullRebuild:

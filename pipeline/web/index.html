@@ -87,6 +87,9 @@
   .swatch.dashed {
     background: repeating-linear-gradient(90deg, #9ca3af 0 5px, transparent 5px 8px) !important;
   }
+  .swatch.dotted {
+    background: radial-gradient(circle, #9ca3af 2px, transparent 2.5px) 0 50% / 6px 5px repeat-x !important;
+  }
   .pct { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
   .bar { grid-column: 2 / 4; grid-row: 2; height: 4px; background: var(--track); border-radius: 2px; overflow: hidden; }
   .bar span { display: block; height: 100%; border-radius: 2px; width: 0; transition: width 0.2s; }
@@ -251,7 +254,7 @@
   }
   const initial = readHash();
   const state = {
-    hidden: new Set((initial.get("hide") || "").split(",").filter(Boolean)),  // "0".."5", "none"
+    hidden: new Set((initial.get("hide") || "").split(",").filter(Boolean)),  // "0".."5", "none", "private"
     type: ["roads", "major"].includes(initial.get("type")) ? initial.get("type") : "all",
     palette: initial.get("palette") === "cvd" ? "cvd" : "classic",
     fresh: initial.get("new") === "1",  // highlight new imagery
@@ -299,10 +302,13 @@
   // --- Legend, doubling as the "in view" breakdown --------------------------
   const legend = document.getElementById("legend");
   const rows = [...BANDS.map((b, i) => ({ key: String(i), label: b.label })),
-                { key: "none", label: "No Google imagery" }];
+                { key: "none", label: "No Google imagery" },
+                // Private roads, driveways and closed paths: the car doesn't go there
+                { key: "private", label: "Private, no imagery" }];
+  const SWATCH_CLASS = { none: " dashed", private: " dotted" };
   legend.innerHTML = rows.map(r => `
     <li><button type="button" data-key="${r.key}" aria-pressed="${!state.hidden.has(r.key)}">
-      <span class="swatch${r.key === "none" ? " dashed" : ""}"></span>
+      <span class="swatch${SWATCH_CLASS[r.key] || ""}"></span>
       <span class="label">${r.label}</span>
       <span class="pct"></span>
       <span class="bar"><span></span></span>
@@ -311,7 +317,7 @@
   function paintLegend() {
     const palette = PALETTES[state.palette];
     legend.querySelectorAll("button").forEach(btn => {
-      const color = btn.dataset.key === "none" ? NO_IMAGERY_COLOR : palette[Number(btn.dataset.key)];
+      const color = btn.dataset.key in SWATCH_CLASS ? NO_IMAGERY_COLOR : palette[Number(btn.dataset.key)];
       btn.querySelector(".swatch").style.background = color;
       btn.querySelector(".bar span").style.background = color;
     });
@@ -375,6 +381,8 @@
   // With "highlight new imagery" on, roads without new imagery fade to this
   const FADED = 0.2;
   const isNew = ["has", "u"];
+  // A private way with no imagery at all; tallied apart, like PRIVATE in pipeline/overview.py
+  const isPrivate = ["all", ["==", ["get", "cov"], "none"], ["has", "pv"]];
   // Only while the overview on show has change tracking (a past update may not)
   const highlighting = () => state.fresh && !document.getElementById("new-control").hidden;
   // Opacity for road layers: fading in over the handoff zooms when there's an
@@ -392,7 +400,7 @@
     const palette = PALETTES[state.palette];
     // A past update has hexagons only: the road tiles are always the latest
     const past = Boolean(state.build);
-    for (const id of ["imagery", "no-imagery"]) map.setPaintProperty(id, "line-opacity", roadOpacity());
+    for (const id of ["imagery", "no-imagery", "private"]) map.setPaintProperty(id, "line-opacity", roadOpacity());
     map.setFilter("new-imagery", ["all", isNew, typeFilter()]);
     map.setLayoutProperty("new-imagery", "visibility", highlighting() && !past ? "visible" : "none");
     const shown = ["literal", visibleBands()];
@@ -400,8 +408,10 @@
     map.setFilter("imagery", ["all", ["==", ["get", "cov"], "google"], ["in", bandIndex(), shown], typeFilter()]);
     map.setPaintProperty("imagery", "line-color", colorFor(palette));
     map.setLayoutProperty("imagery", "visibility", past ? "none" : "visible");
-    map.setFilter("no-imagery", ["all", ["!=", ["get", "cov"], "google"], typeFilter()]);
-    map.setLayoutProperty("no-imagery", "visibility", past || state.hidden.has("none") ? "none" : "visible");
+    for (const [id, key, which] of [["no-imagery", "none", ["!", isPrivate]], ["private", "private", isPrivate]]) {
+      map.setFilter(id, ["all", ["!=", ["get", "cov"], "google"], which, typeFilter()]);
+      map.setLayoutProperty(id, "visibility", past || state.hidden.has(key) ? "none" : "visible");
+    }
     if (overview) {
       const hexColor = ["case", ["==", ["get", "m"], null], NO_IMAGERY_COLOR, colorFor(palette)];
       // A hexagon shows if the band of its median is on (or "no imagery" is on, for those without any)
@@ -447,6 +457,12 @@
       paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [2, 1.5] },
       layout: { "line-cap": "butt" },
     }, firstLabel);
+    // Private ways without imagery: dots (round-capped dashes) rather than dashes
+    map.addLayer({
+      id: "private", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
+      paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [0, 2] },
+      layout: { "line-cap": "round" },
+    }, firstLabel);
     // A dark casing under roads with new imagery, shown while highlighting
     map.addLayer({
       id: "new-imagery", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
@@ -462,7 +478,7 @@
       layout: { "line-cap": "round", "line-join": "round" },
     }, firstLabel);
 
-    for (const id of ["imagery", "no-imagery", "hex-coarse", "hex-fine"].filter(l => map.getLayer(l))) {
+    for (const id of ["imagery", "no-imagery", "private", "hex-coarse", "hex-fine"].filter(l => map.getLayer(l))) {
       map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
     }
@@ -505,7 +521,7 @@
     const filter = typeFilter();
     const features = map.querySourceFeatures("roads", filter === true
       ? { sourceLayer: "roads" } : { sourceLayer: "roads", filter });
-    const metres = { none: 0, b: BANDS.map(() => 0), u: 0 };
+    const metres = { none: 0, private: 0, b: BANDS.map(() => 0), u: 0 };
     for (const f of features) {
       const g = f.geometry;
       const lines = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : [];
@@ -517,11 +533,12 @@
       }
       if (!m) continue;
       if (f.properties.cov === "google") metres.b[bandOf(nowMonthIndex - f.properties.m)] += m;
+      else if (f.properties.cov === "none" && f.properties.pv !== undefined) metres.private += m;
       else metres.none += m;
       if (f.properties.u !== undefined) metres.u += m;
     }
-    const b_km = metres.b.map(m => m / 1000), none = metres.none / 1000;
-    return { k: b_km.reduce((a, x) => a + x, none), none, b: b_km, u: metres.u / 1000 };
+    const b_km = metres.b.map(m => m / 1000), none = metres.none / 1000, priv = metres.private / 1000;
+    return { k: b_km.reduce((a, x) => a + x, none + priv), none, private: priv, b: b_km, u: metres.u / 1000 };
   }
 
   function hexTotals() {
@@ -535,9 +552,10 @@
       cells = [statsCells.reduce((a, b) => (dist(a) <= dist(b) ? a : b))];
       where = "Around here";
     }
-    const totals = { k: 0, none: 0, b: BANDS.map(() => 0), u: 0 };
+    const totals = { k: 0, none: 0, private: 0, b: BANDS.map(() => 0), u: 0 };
     for (const c of cells) {
-      totals.k += c.k; totals.none += c.n + c.o; totals.u += c.u || 0;
+      // Overviews built before private ways were told apart have no "p"
+      totals.k += c.k; totals.none += c.n + c.o; totals.private += c.p || 0; totals.u += c.u || 0;
       totals.b.forEach((_, i) => { totals.b[i] += c[`b${i}`]; });
     }
     return { totals, where };
@@ -569,7 +587,8 @@
       : `No ${what.slice(3)} in view`) +
       (highlighting() ? `<br>New imagery since the last update: ${newKm}` : "");
     legend.querySelectorAll("button").forEach(btn => {
-      const km = btn.dataset.key === "none" ? totals.none : totals.b[Number(btn.dataset.key)];
+      const key = btn.dataset.key;
+      const km = key === "none" || key === "private" ? totals[key] : totals.b[Number(key)];
       const pct = totals.k ? 100 * km / totals.k : 0;
       btn.querySelector(".pct").textContent = pct >= 0.5 || pct === 0 ? `${Math.round(pct)}%` : "<1%";
       btn.querySelector(".bar span").style.width = `${pct}%`;
@@ -867,17 +886,19 @@
   }
 
   map.on("click", e => {
-    const layers = ["imagery", "no-imagery", "hex-coarse", "hex-fine"].filter(id => map.getLayer(id));
+    const layers = ["imagery", "no-imagery", "private", "hex-coarse", "hex-fine"].filter(id => map.getLayer(id));
     const f = map.queryRenderedFeatures(e.point, { layers })[0];
     if (!f) return;
     const p = f.properties;
     let html;
     if (f.layer.id.startsWith("hex")) {
-      const covered = p.k ? Math.round(100 * (p.k - p.n - p.o) / p.k) : 0;
+      const priv = Number(p.p) || 0;
+      const covered = p.k ? Math.round(100 * (p.k - p.n - p.o - priv) / p.k) : 0;
       const median = p.m === null || p.m === undefined || p.m === "null"
         ? "No Google imagery" : `Median capture ${monthName(Number(p.m))} (${describeAge(refMonthIndex - Number(p.m))})`;
       html = `<h2>This area</h2><div>${median}</div>
         <div>${fmt.format(p.k)} km of road and path, ${covered}% with Google imagery</div>
+        ${priv >= 0.1 ? `<div>${kmText(priv)} km private with no imagery</div>` : ""}
         ${Number(p.u) > 0 ? `<div>${Number(p.u).toFixed(1)} km with new imagery since the update before</div>` : ""}
         <div class="muted">${state.build ? "As of this update. Go back to the latest to see roads." : "Zoom in to see individual roads."}</div>`;
     } else {
@@ -891,8 +912,12 @@
           body += `<br><strong>New since the last update:</strong> ` +
             (Number(p.u) > 0 ? `previously ${monthName(Number(p.u))}` : "no Street View before");
         }
+        if (p.pv !== undefined) body += "<br>Private or no public access";
+      } else if (p.cov === "none" && p.pv !== undefined) {
+        body = "Private or no public access, so the Street View car doesn't usually go here";
       } else {
         body = p.cov === "other" ? "Only user-contributed photos here" : "No Street View imagery found";
+        if (p.pv !== undefined) body += "<br>Private or no public access";
       }
       const { lat, lng } = e.lngLat;
       // Open the panorama this stretch is dated by. Given only a point, Google
