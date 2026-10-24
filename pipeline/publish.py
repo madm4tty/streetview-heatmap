@@ -4,7 +4,9 @@ R2 speaks the S3 API, so boto3 talks to it with an R2 endpoint URL.
 
 Two buckets:
 - the site bucket is public on a custom domain. Everything goes under a secret
-  folder (R2_SITE_PREFIX): <prefix>/index.html and <prefix>/tiles/<area>-<stamp>.pmtiles.
+  folder (R2_SITE_PREFIX): <prefix>/index.html and <prefix>/tiles/<area>-<stamp>.pmtiles,
+  plus <prefix>/history/: a copy of every build's overview, kept for good, and
+  <area>.json, which lists them with their totals for the page's update digest.
   R2 never lists a bucket, so only people with the link can find the map;
 - the state bucket (private, no custom domain) holds the lookup cache and the last
   sampling result, so the monthly job on a fresh machine can `refresh` instead of
@@ -12,6 +14,7 @@ Two buckets:
 """
 
 import gzip
+import json
 import logging
 import os
 import re
@@ -98,6 +101,16 @@ def version_keys(area: str, now: datetime) -> Tuple[str, str]:
     return f"{stem}.pmtiles", f"{stem}.overview.json"
 
 
+def history_key(area: str) -> str:
+    """The area's list of builds, relative to the page."""
+    return f"history/{area}.json"
+
+
+def archive_key(area: str, now: datetime) -> str:
+    """Where a build's overview is kept for good, relative to the page."""
+    return f"history/{area}-{now:%Y%m%d-%H%M%S}.overview.json"
+
+
 def set_page_constant(html: str, name: str, value: str) -> str:
     new_html, n = re.subn(PAGE_CONSTANT_RE.format(name=name),
                           lambda m: f'{m.group(1)}"{value}";', html)
@@ -106,10 +119,11 @@ def set_page_constant(html: str, name: str, value: str) -> str:
     return new_html
 
 
-def point_page_at(html: str, tiles_path: str, overview_path: str = "") -> str:
-    """Set the page's default tiles file and overview (empty: none)."""
+def point_page_at(html: str, tiles_path: str, overview_path: str = "", history_path: str = "") -> str:
+    """Set the page's default tiles file, overview and history (empty: none)."""
     html = set_page_constant(html, "DEFAULT_TILES", tiles_path)
-    return set_page_constant(html, "DEFAULT_OVERVIEW", overview_path)
+    html = set_page_constant(html, "DEFAULT_OVERVIEW", overview_path)
+    return set_page_constant(html, "DEFAULT_HISTORY", history_path)
 
 
 def list_objects(client, bucket: str, prefix: str = "") -> List[Dict]:
@@ -181,30 +195,79 @@ def publish_site(client, bucket: str, prefix: str, area: str, site_dir: str,
 
     existing = area_versions(client, bucket, prefix, area)
     pruned = existing[:max(0, len(existing) - (KEEP_VERSIONS - 1))]
-    adding = os.path.getsize(pmtiles) + (os.path.getsize(overview_file) if has_overview else 0)
+    # The overview goes up twice: beside the tiles, and into the history
+    adding = os.path.getsize(pmtiles) + (2 * os.path.getsize(overview_file) if has_overview else 0)
     check_storage(client, [bucket, *also_count], adding=adding,
                   freeing=sum(o.get("Size", 0) for v in pruned for o in v))
 
     # Relative to the page, so the page itself never needs to know the prefix
-    tiles, overview = version_keys(area, now or datetime.now(timezone.utc))
+    now = now or datetime.now(timezone.utc)
+    tiles, overview = version_keys(area, now)
+    archive = archive_key(area, now)
     # Data first, so the live page never points at a file that isn't there yet
     uploads = [(pmtiles, tiles, "application/octet-stream")]
     if has_overview:
-        uploads.append((overview_file, overview, "application/json"))
+        uploads += [(overview_file, overview, "application/json"),
+                    (overview_file, archive, "application/json")]
     for path, key, content_type in uploads:
         logger.info("Uploading %s -> %s/%s", path, bucket, redact(f"{prefix}/{key}", prefix))
         client.upload_file(path, bucket, f"{prefix}/{key}", ExtraArgs={
             "ContentType": content_type, "CacheControl": IMMUTABLE})
+    if has_overview:
+        record_history(client, bucket, prefix, area, overview_file, archive, now)
 
-    page_object = upload_page(client, bucket, prefix, index, tiles, overview if has_overview else "")
+    page_object = upload_page(client, bucket, prefix, index, tiles,
+                              overview if has_overview else "", history_key(area))
     prune_tiles(client, bucket, prefix, area)
     return page_object
 
 
-def upload_page(client, bucket: str, prefix: str, index: str, tiles: str, overview: str) -> str:
+def history_entry(overview: Dict, archive: str, now: datetime) -> Optional[Dict]:
+    """One build's line in the history: when, its archived overview, totals and top areas.
+
+    None for an overview from before totals were added.
+    """
+    if "totals" not in overview:
+        return None
+    return {"stamp": f"{now:%Y%m%d-%H%M%S}", "built": overview.get("built"), "overview": archive,
+            **overview["totals"], "top": overview.get("top", [])}
+
+
+def read_history(client, bucket: str, key: str) -> Dict:
+    """The published history, or an empty one if there isn't one yet."""
+    try:
+        body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    except Exception as exc:
+        if not _is_missing(exc):
+            raise
+        return {"builds": []}
+    return json.loads(body)
+
+
+def record_history(client, bucket: str, prefix: str, area: str, overview_file: str,
+                   archive: str, now: datetime) -> Optional[Dict]:
+    """Add this build to the area's history file, oldest build first. Returns the new history."""
+    with open(overview_file, encoding="utf-8") as f:
+        entry = history_entry(json.load(f), archive, now)
+    if entry is None:
+        logger.info("Overview has no totals; history not updated")
+        return None
+    key = f"{prefix}/{history_key(area)}"
+    history = read_history(client, bucket, key)
+    builds = [b for b in history.get("builds", []) if b.get("stamp") != entry["stamp"]] + [entry]
+    history = {"builds": sorted(builds, key=lambda b: b["stamp"])}
+    # Changes on every publish, so browsers must re-check it, like the page
+    client.put_object(Bucket=bucket, Key=key, Body=json.dumps(history, separators=(",", ":")).encode(),
+                      ContentType="application/json", CacheControl=NO_CACHE)
+    logger.info("Recorded build %s in %s (%d builds)", entry["stamp"], redact(key, prefix), len(builds))
+    return history
+
+
+def upload_page(client, bucket: str, prefix: str, index: str, tiles: str, overview: str,
+                history: str = "") -> str:
     """Upload index.html pointing at the given data files. Returns the page's key."""
     with open(index, encoding="utf-8") as f:
-        page = point_page_at(f.read(), tiles, overview)
+        page = point_page_at(f.read(), tiles, overview, history)
     page_object = f"{prefix}/index.html"
     client.put_object(Bucket=bucket, Key=page_object, Body=page.encode("utf-8"),
                       ContentType="text/html; charset=utf-8", CacheControl=NO_CACHE)
@@ -227,7 +290,8 @@ def publish_page(client, bucket: str, prefix: str, area: str, index: str) -> Tup
         if tiles:
             overview = tiles[:-len(".pmtiles")] + ".overview.json"
             overview = overview if overview in keys else ""
-            return upload_page(client, bucket, prefix, index, tiles, overview), tiles, overview
+            page = upload_page(client, bucket, prefix, index, tiles, overview, history_key(area))
+            return page, tiles, overview
     raise SystemExit(f"Nothing published for '{area}' yet: run a full build first.")
 
 

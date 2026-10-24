@@ -87,6 +87,12 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   after each move at zoom 11–12 in central London (on a slow test machine) and a few ms at street level; raise
   `ROAD_STATS_ZOOM` in the page if that ever feels sluggish.
 - **Filters**: all ways, roads only (no paths, tracks or service roads), or major roads.
+- **Private ways**: roads closed to cars (`access`, `vehicle`, `motor_vehicle` or `motorcar` set to `private` or
+  `no`, the most specific tag winning, so bus gates count), driveways (`service=driveway`), and paths where every
+  tagged mode (`foot`, `bicycle`, falling back to `access`) is shut out. Without imagery they're drawn as dots and
+  have their own legend row, "Private, no imagery", instead of counting as gaps in Google's coverage (`pv` in the
+  tiles, `p` in the hexagon tallies). With imagery they're dated as usual and the popup notes the restriction.
+  Sampling is unchanged. Gates (tagged on nodes) aren't read.
 - **Colour-blind safe colours**: the Okabe–Ito set, recent to old: blue, sky blue, bluish green, orange, vermilion,
   wine. Distinct hues chosen to stay apart for colour-blind viewers; passes the categorical palette checks on every
   pair (sky blue and orange are faint on the light base map, which the text labels cover). It replaced a single-hue
@@ -97,13 +103,22 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   hexagon tallies count that length too (`u`, km). With the box ticked, everything else fades, new stretches get a
   dark casing, the panel shows the new km in view, and popups give the previous date. The box only appears for data
   built with this.
+- **Updates and history**: each `publish` keeps a copy of the build's overview under `history/` for good (2.9 MB
+  each, about 35 MB a year) and adds the build to `history/<area>.json`, with the UK totals per age band and the
+  five areas (H3 resolution-4 hexagons, about 1,800 km²) with the most new imagery. The panel's "Latest update"
+  section shows the new km, names those areas (Photon's reverse geocoder, fetched when the section is opened) and
+  flies to one with the highlight on when clicked. From the second build it also charts the share of roads and
+  paths with imagery under a year old at each update. Any past update can be shown as hexagons (roads are always
+  the latest build's), with ages as of that update; `#build=<stamp>` links to it. Builds published before this
+  have no history entry.
 - **Place search** with [Photon](https://photon.komoot.io) (free OpenStreetMap geocoder, limited to the UK), and a
   locate-me button.
 - **"Open in Street View"** opens the exact panorama the stretch is dated by: `tiles` looks up each piece's
   panorama ID in the cache (the lookup at one of its sample points that gave its date) and stores it as `pano`.
   Given only a point, Google Maps picks its own panorama nearby, which can be a different or broken one. Stretches
   without an ID fall back to the tapped point. The IDs add roughly 18% to the tiles.
-- **Shareable links**: map position and filters live in the URL hash (`#map=…&hide=5,none&type=major&palette=cvd`).
+- **Shareable links**: map position, filters and any past update shown live in the URL hash
+  (`#map=…&hide=5,none&type=major&palette=cvd&build=20261102-071500`).
 - **Phones**: the panel becomes a drawer along the bottom, closed to start with.
 
 Band edges (6, 12, 36, 60, 120 months) are defined in both `pipeline/overview.py` and the page; keep them in step.
@@ -236,7 +251,7 @@ minutes. Running without the box instead would refresh, leaving the unfinished s
 R2 has no hard spending cap. A budget alert ($1, under **Manage Account → Billing → Billable Usage → Create budget
 alert**) only sends an email, and only the day after the threshold is crossed. Realistic exposure is tiny: egress is
 free, the free tier is 10 GB of storage and 10M reads a month, and `publish` keeps only the two newest tiles files,
-so storage stays flat. The real risks are a leaked R2 API token, `r2.dev` access being switched on, or the map link
+so storage stays nearly flat (the archived overviews add about 35 MB a year). The real risks are a leaked R2 API token, `r2.dev` access being switched on, or the map link
 spreading and being hammered.
 
 If the bill or usage looks wrong, work through these in order:

@@ -27,6 +27,8 @@ def piece_properties(segment: Segment, value: str) -> Dict:
     props = {"hw": segment.highway}
     if segment.name:
         props["name"] = segment.name
+    if segment.private:
+        props["pv"] = 1
     if value in (NO_COVERAGE, NON_GOOGLE):
         props["cov"] = value
     else:

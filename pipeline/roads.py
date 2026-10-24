@@ -32,6 +32,13 @@ PATH_HIGHWAYS = {
     "footway", "path", "cycleway", "bridleway", "steps", "pedestrian", "track",
 }
 
+# Access values that keep the public out. A private way without imagery is
+# shown apart from gaps in Google's coverage: the Street View car doesn't go there.
+NO_ACCESS = {"private", "no"}
+# Tags read for access, most specific first: cars on roads; walkers or cyclists on paths
+CAR_ACCESS = ("motorcar", "motor_vehicle", "vehicle", "access")
+PATH_ACCESS = (("foot", "access"), ("bicycle", "access"))
+
 
 @dataclass
 class Segment:
@@ -41,6 +48,7 @@ class Segment:
     name: Optional[str]
     coords: List[Coord]
     cum: List[float] = field(default_factory=list)
+    private: bool = False
 
     def __post_init__(self):
         if not self.cum:
@@ -76,6 +84,26 @@ def include_way(tags: Dict[str, str]) -> bool:
     return True
 
 
+def _access(tags: Dict[str, str], keys: Tuple[str, ...]) -> Optional[str]:
+    """The most specific of `keys` that is tagged, as OSM access tags work."""
+    return next((tags[k] for k in keys if tags.get(k)), None)
+
+
+def is_private(tags: Dict[str, str]) -> bool:
+    """True if the way is closed to the public: private or no access, or a driveway.
+
+    Roads go by car access, so a bus gate counts. Paths go by walkers and
+    cyclists, and are private only if every mode that's tagged is shut out
+    (a cycleway with access=no and bicycle=designated is open).
+    """
+    if tags.get("service") == "driveway":
+        return True
+    if tags.get("highway") not in PATH_HIGHWAYS:
+        return _access(tags, CAR_ACCESS) in NO_ACCESS
+    tagged = [v for v in (_access(tags, keys) for keys in PATH_ACCESS) if v]
+    return bool(tagged) and all(v in NO_ACCESS for v in tagged)
+
+
 def iter_segments(pbf_path: str) -> Iterator[Segment]:
     """Yield one segment per included highway way in an .osm.pbf extract."""
     import osmium  # Imported here so tests don't need pyosmium installed
@@ -87,8 +115,9 @@ def iter_segments(pbf_path: str) -> Iterator[Segment]:
     for obj in processor:
         if not obj.is_way():
             continue
-        tags = {"highway": obj.tags.get("highway"), "name": obj.tags.get("name"),
-                "area": obj.tags.get("area"), "footway": obj.tags.get("footway")}
+        tags = {k: obj.tags.get(k) for k in (
+            "highway", "name", "area", "footway", "service",
+            *{k for keys in (CAR_ACCESS, *PATH_ACCESS) for k in keys})}
         if not include_way(tags):
             continue
         try:
@@ -98,7 +127,7 @@ def iter_segments(pbf_path: str) -> Iterator[Segment]:
         if len(coords) < 2:
             continue
         seg = Segment(id=str(obj.id), highway=tags["highway"], name=tags["name"],
-                      coords=coords)
+                      coords=coords, private=is_private(tags))
         if seg.length >= 1.0:
             yield seg
 

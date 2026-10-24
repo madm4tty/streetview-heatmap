@@ -87,6 +87,9 @@
   .swatch.dashed {
     background: repeating-linear-gradient(90deg, #9ca3af 0 5px, transparent 5px 8px) !important;
   }
+  .swatch.dotted {
+    background: radial-gradient(circle, #9ca3af 2px, transparent 2.5px) 0 50% / 6px 5px repeat-x !important;
+  }
   .pct { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
   .bar { grid-column: 2 / 4; grid-row: 2; height: 4px; background: var(--track); border-radius: 2px; overflow: hidden; }
   .bar span { display: block; height: 100%; border-radius: 2px; width: 0; transition: width 0.2s; }
@@ -100,6 +103,29 @@
   }
   .controls select option { color: #1f2937; }
   #as-of { margin: 10px 0 0; }
+
+  /* Update digest and history */
+  .viewing { background: var(--track); border-radius: 6px; padding: 4px 8px; margin: 10px 0 0; }
+  .updates { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 4px; }
+  .updates summary { cursor: pointer; padding: 6px 0; min-height: 20px; }
+  .updates p { margin: 4px 0; }
+  .updates figure { margin: 10px 0 6px; }
+  .areas, .builds { list-style: none; margin: 4px 0 8px; padding: 0; }
+  .areas button, .builds button {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    width: 100%; font: inherit; color: inherit; text-align: left;
+    background: none; border: 0; border-radius: 6px; padding: 6px 4px; cursor: pointer; min-height: 32px;
+  }
+  .builds button { flex-direction: column; align-items: flex-start; gap: 0; }
+  .areas button:hover, .builds button:hover { background: var(--hover); }
+  .builds button[aria-current="true"] { background: var(--track); }
+  .num { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; white-space: nowrap; }
+  #trend-chart { display: block; width: 100%; height: auto; touch-action: pan-y; }
+  #trend-chart .grid { stroke: var(--border); stroke-width: 1; }
+  #trend-chart .axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  #trend-chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  #trend-chart .dot { fill: var(--accent); stroke: var(--panel-bg); stroke-width: 2; }
+  #trend-chart .crosshair { stroke: var(--muted); stroke-width: 1; }
 
   .maplibregl-popup-content { font: 13px/1.4 system-ui, sans-serif; color: #1f2937; }
   .maplibregl-popup-content h2 { font-size: 14px; margin: 0 0 4px; }
@@ -134,6 +160,7 @@
              aria-label="Search for a place" aria-controls="search-results" aria-autocomplete="list">
       <ul id="search-results" role="listbox" hidden></ul>
     </form>
+    <p class="viewing small" id="viewing" hidden></p>
     <p id="in-view" class="muted" aria-live="polite"></p>
     <ul class="legend" id="legend"></ul>
     <div class="controls">
@@ -147,6 +174,18 @@
       <label><input type="checkbox" id="cvd"> Colour-blind safe colours</label>
       <label id="new-control" hidden><input type="checkbox" id="new"> Highlight new imagery since the last update</label>
     </div>
+    <details class="updates" id="updates" hidden>
+      <summary id="digest-head"></summary>
+      <p class="small" id="digest-body"></p>
+      <ul class="areas" id="top-areas"></ul>
+      <figure id="trend" hidden>
+        <figcaption class="small muted" id="trend-title">Roads and paths with imagery under a year old, at each update</figcaption>
+        <svg id="trend-chart" role="img" aria-labelledby="trend-title"></svg>
+        <p class="small" id="trend-readout"></p>
+      </figure>
+      <p class="small muted">Every update, to view as hexagons:</p>
+      <ul class="builds" id="builds"></ul>
+    </details>
     <p class="muted small" id="as-of"></p>
   </div>
 </aside>
@@ -177,11 +216,13 @@
   const HANDOFF_ZOOM = 8;
 
   const query = new URLSearchParams(location.search);
-  // `pipeline.run publish` rewrites these two to the versioned files it uploads
+  // `pipeline.run publish` rewrites these to the files it uploads
   const DEFAULT_TILES = "uk.pmtiles";
   const DEFAULT_OVERVIEW = "uk.overview.json";
+  const DEFAULT_HISTORY = "";
   const tilesUrl = query.get("tiles") || DEFAULT_TILES;
   const overviewUrl = query.has("overview") ? query.get("overview") : DEFAULT_OVERVIEW;
+  const historyUrl = query.has("history") ? query.get("history") : DEFAULT_HISTORY;
 
   // Filter state lives in the URL hash next to MapLibre's map=zoom/lat/lng, so a
   // shared link opens the same view. Values are plain tokens, so no encoding.
@@ -213,20 +254,26 @@
   }
   const initial = readHash();
   const state = {
-    hidden: new Set((initial.get("hide") || "").split(",").filter(Boolean)),  // "0".."5", "none"
+    hidden: new Set((initial.get("hide") || "").split(",").filter(Boolean)),  // "0".."5", "none", "private"
     type: ["roads", "major"].includes(initial.get("type")) ? initial.get("type") : "all",
     palette: initial.get("palette") === "cvd" ? "cvd" : "classic",
     fresh: initial.get("new") === "1",  // highlight new imagery
+    // The stamp of a past update being viewed, or null for the latest
+    build: /^\d{8}-\d{6}$/.test(initial.get("build") || "") ? initial.get("build") : null,
   };
 
   // Ages are worked out against today's date in the browser, so the
   // tiles never need rebuilding just because time has passed.
   const now = new Date();
   const nowMonthIndex = now.getFullYear() * 12 + now.getMonth();
-  const ageMonths = ["-", nowMonthIndex, ["get", "m"]];
-  const bandIndex = ["step", ageMonths, 0, ...BANDS.slice(0, -1).flatMap((b, i) => [b.maxMonths, i + 1])];
-  const colorFor = palette => ["step", ageMonths, palette[0],
+  // Viewing a past update, ages are as of that update instead
+  let refMonthIndex = nowMonthIndex;
+  const ageMonths = () => ["-", refMonthIndex, ["get", "m"]];
+  const bandIndex = () => ["step", ageMonths(), 0, ...BANDS.slice(0, -1).flatMap((b, i) => [b.maxMonths, i + 1])];
+  const colorFor = palette => ["step", ageMonths(), palette[0],
     ...BANDS.slice(0, -1).flatMap((b, i) => [b.maxMonths, palette[i + 1]])];
+  // "2026-10" -> months since year 0, like the tiles' "m"
+  const monthIndexOf = ym => { const [y, m] = ym.split("-").map(Number); return y * 12 + m - 1; };
 
   const isMajor = ["in", ["get", "hw"], ["literal", MAJOR]];
   const widthExpr = ["interpolate", ["linear"], ["zoom"],
@@ -255,10 +302,13 @@
   // --- Legend, doubling as the "in view" breakdown --------------------------
   const legend = document.getElementById("legend");
   const rows = [...BANDS.map((b, i) => ({ key: String(i), label: b.label })),
-                { key: "none", label: "No Google imagery" }];
+                { key: "none", label: "No Google imagery" },
+                // Private roads, driveways and closed paths: the car doesn't go there
+                { key: "private", label: "Private, no imagery" }];
+  const SWATCH_CLASS = { none: " dashed", private: " dotted" };
   legend.innerHTML = rows.map(r => `
     <li><button type="button" data-key="${r.key}" aria-pressed="${!state.hidden.has(r.key)}">
-      <span class="swatch${r.key === "none" ? " dashed" : ""}"></span>
+      <span class="swatch${SWATCH_CLASS[r.key] || ""}"></span>
       <span class="label">${r.label}</span>
       <span class="pct"></span>
       <span class="bar"><span></span></span>
@@ -267,7 +317,7 @@
   function paintLegend() {
     const palette = PALETTES[state.palette];
     legend.querySelectorAll("button").forEach(btn => {
-      const color = btn.dataset.key === "none" ? NO_IMAGERY_COLOR : palette[Number(btn.dataset.key)];
+      const color = btn.dataset.key in SWATCH_CLASS ? NO_IMAGERY_COLOR : palette[Number(btn.dataset.key)];
       btn.querySelector(".swatch").style.background = color;
       btn.querySelector(".bar span").style.background = color;
     });
@@ -291,61 +341,98 @@
   map.addControl(new maplibregl.NavigationControl(), "top-right");
   map.addControl(new maplibregl.GeolocateControl({ fitBoundsOptions: { maxZoom: 15 } }), "top-right");
 
-  let overview = null;     // the overview GeoJSON, or null if there isn't one
-  let statsCells = [];     // resolution-6 hexagons, for the "in view" numbers
+  let overview = null;        // the overview on show, or null if there isn't one
+  let latestOverview = null;  // the latest update's overview
+  let statsCells = [];        // resolution-6 hexagons, for the "in view" numbers
+  let builds = [];            // every published update, oldest first
 
-  async function loadOverview() {
-    if (!overviewUrl) return null;
+  async function fetchJson(url, what) {
+    if (!url) return null;
     try {
-      const resp = await fetch(new URL(overviewUrl, location.href));
+      const resp = await fetch(new URL(url, location.href));
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       return await resp.json();
     } catch (err) {
-      console.warn("No overview, showing roads at every zoom:", err);
+      console.warn(`No ${what}:`, err);
       return null;
+    }
+  }
+
+  // Point the panel's numbers and notes at an overview (the latest, or a past update's)
+  function useOverview(data) {
+    overview = data;
+    // Only data built with change tracking can be highlighted. The totals leave
+    // out "u" when a build had nothing to compare with; older overviews have no totals
+    document.getElementById("new-control").hidden =
+      !(data.totals ? "u" in data.totals : data.features.some(f => "u" in f.properties));
+    // Centre of each hexagon: the mean of its six corners
+    statsCells = data.features.filter(f => f.properties.r === 6).map(f => {
+      const ring = f.geometry.coordinates[0].slice(0, -1);
+      return { ...f.properties, x: ring.reduce((s, p) => s + p[0], 0) / ring.length,
+               y: ring.reduce((s, p) => s + p[1], 0) / ring.length };
+    });
+    if (data.built) {
+      const when = monthName(monthIndexOf(data.built));
+      document.getElementById("as-of").textContent =
+        `Imagery dates checked ${when}. Hexagons are coloured by the median capture date of their roads.`;
     }
   }
 
   // With "highlight new imagery" on, roads without new imagery fade to this
   const FADED = 0.2;
   const isNew = ["has", "u"];
+  // A private way with no imagery at all; tallied apart, like PRIVATE in pipeline/overview.py
+  const isPrivate = ["all", ["==", ["get", "cov"], "none"], ["has", "pv"]];
+  // Only while the overview on show has change tracking (a past update may not)
+  const highlighting = () => state.fresh && !document.getElementById("new-control").hidden;
   // Opacity for road layers: fading in over the handoff zooms when there's an
   // overview, and faded unless new while highlighting
   function roadOpacity() {
-    const full = state.fresh ? ["case", isNew, 1, FADED] : 1;
+    const full = highlighting() ? ["case", isNew, 1, FADED] : 1;
     return overview ? ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, 0, HANDOFF_ZOOM + 1.5, full] : full;
   }
   function hexOpacity(fine) {
-    const full = state.fresh ? ["case", [">", ["coalesce", ["get", "u"], 0], 0], 0.7, 0.12] : 0.7;
+    const full = highlighting() ? ["case", [">", ["coalesce", ["get", "u"], 0], 0], 0.7, 0.12] : 0.7;
     return fine ? ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, full, HANDOFF_ZOOM + 1.5, 0] : full;
   }
 
   function applyStyle() {
     const palette = PALETTES[state.palette];
-    for (const id of ["imagery", "no-imagery"]) map.setPaintProperty(id, "line-opacity", roadOpacity());
+    // A past update has hexagons only: the road tiles are always the latest
+    const past = Boolean(state.build);
+    for (const id of ["imagery", "no-imagery", "private"]) map.setPaintProperty(id, "line-opacity", roadOpacity());
     map.setFilter("new-imagery", ["all", isNew, typeFilter()]);
-    map.setLayoutProperty("new-imagery", "visibility", state.fresh ? "visible" : "none");
+    map.setLayoutProperty("new-imagery", "visibility", highlighting() && !past ? "visible" : "none");
     const shown = ["literal", visibleBands()];
     // Filter before colour, so the colour rule never sees roads without a date
-    map.setFilter("imagery", ["all", ["==", ["get", "cov"], "google"], ["in", bandIndex, shown], typeFilter()]);
+    map.setFilter("imagery", ["all", ["==", ["get", "cov"], "google"], ["in", bandIndex(), shown], typeFilter()]);
     map.setPaintProperty("imagery", "line-color", colorFor(palette));
-    map.setFilter("no-imagery", ["all", ["!=", ["get", "cov"], "google"], typeFilter()]);
-    map.setLayoutProperty("no-imagery", "visibility", state.hidden.has("none") ? "none" : "visible");
+    map.setLayoutProperty("imagery", "visibility", past ? "none" : "visible");
+    for (const [id, key, which] of [["no-imagery", "none", ["!", isPrivate]], ["private", "private", isPrivate]]) {
+      map.setFilter(id, ["all", ["!=", ["get", "cov"], "google"], which, typeFilter()]);
+      map.setLayoutProperty(id, "visibility", past || state.hidden.has(key) ? "none" : "visible");
+    }
     if (overview) {
       const hexColor = ["case", ["==", ["get", "m"], null], NO_IMAGERY_COLOR, colorFor(palette)];
       // A hexagon shows if the band of its median is on (or "no imagery" is on, for those without any)
-      const hexShown = ["case", ["==", ["get", "m"], null], !state.hidden.has("none"), ["in", bandIndex, shown]];
+      const hexShown = ["case", ["==", ["get", "m"], null], !state.hidden.has("none"), ["in", bandIndex(), shown]];
       for (const id of ["hex-coarse", "hex-fine"]) {
         map.setFilter(id, ["all", ["==", ["get", "r"], id === "hex-coarse" ? 5 : 6], hexShown]);
         map.setPaintProperty(id, "fill-color", hexColor);
-        map.setPaintProperty(id, "fill-opacity", hexOpacity(id === "hex-fine"));
+        map.setPaintProperty(id, "fill-opacity", hexOpacity(id === "hex-fine" && !past));
       }
+      // Past updates keep their hexagons at every zoom, with no roads to hand over to
+      map.setLayerZoomRange("hex-fine", 6.5, past ? 24 : HANDOFF_ZOOM + 1.5);
     }
     paintLegend();
   }
 
   map.on("load", async () => {
-    overview = await loadOverview();
+    const [loaded, history] = await Promise.all([
+      fetchJson(overviewUrl, "overview, showing roads at every zoom"),
+      fetchJson(historyUrl, "update history yet")]);
+    overview = latestOverview = loaded;
+    builds = (overview && history?.builds) || [];
     const firstLabel = map.getStyle().layers.find(l => l.type === "symbol")?.id;
 
     // With an overview, roads start at the handoff zoom, so no road tiles are
@@ -363,25 +450,18 @@
                      paint: { "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
       map.addLayer({ id: "hex-fine", type: "fill", source: "hex", minzoom: 6.5, maxzoom: HANDOFF_ZOOM + 1.5,
                      paint: { "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
-      // Only data built with change tracking can be highlighted
-      document.getElementById("new-control").hidden = !overview.features.some(f => "u" in f.properties);
-      // Centre of each hexagon: the mean of its six corners
-      statsCells = overview.features.filter(f => f.properties.r === 6).map(f => {
-        const ring = f.geometry.coordinates[0].slice(0, -1);
-        return { ...f.properties, x: ring.reduce((s, p) => s + p[0], 0) / ring.length,
-                 y: ring.reduce((s, p) => s + p[1], 0) / ring.length };
-      });
-      if (overview.built) {
-        const [y, m] = overview.built.split("-").map(Number);
-        const when = new Date(y, m - 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
-        document.getElementById("as-of").textContent =
-          `Imagery dates checked ${when}. Hexagons are coloured by the median capture date of their roads.`;
-      }
+      useOverview(overview);
     }
     map.addLayer({
       id: "no-imagery", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
       paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [2, 1.5] },
       layout: { "line-cap": "butt" },
+    }, firstLabel);
+    // Private ways without imagery: dots (round-capped dashes) rather than dashes
+    map.addLayer({
+      id: "private", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
+      paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [0, 2] },
+      layout: { "line-cap": "round" },
     }, firstLabel);
     // A dark casing under roads with new imagery, shown while highlighting
     map.addLayer({
@@ -398,12 +478,14 @@
       layout: { "line-cap": "round", "line-join": "round" },
     }, firstLabel);
 
-    for (const id of ["imagery", "no-imagery", "hex-coarse", "hex-fine"].filter(l => map.getLayer(l))) {
+    for (const id of ["imagery", "no-imagery", "private", "hex-coarse", "hex-fine"].filter(l => map.getLayer(l))) {
       map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
     }
     applyStyle();
     updateInView();
+    if (state.build) await viewBuild(state.build);
+    renderUpdates();
   });
 
   // --- "In view" numbers ---------------------------------------------------
@@ -439,7 +521,7 @@
     const filter = typeFilter();
     const features = map.querySourceFeatures("roads", filter === true
       ? { sourceLayer: "roads" } : { sourceLayer: "roads", filter });
-    const metres = { none: 0, b: BANDS.map(() => 0), u: 0 };
+    const metres = { none: 0, private: 0, b: BANDS.map(() => 0), u: 0 };
     for (const f of features) {
       const g = f.geometry;
       const lines = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : [];
@@ -451,11 +533,12 @@
       }
       if (!m) continue;
       if (f.properties.cov === "google") metres.b[bandOf(nowMonthIndex - f.properties.m)] += m;
+      else if (f.properties.cov === "none" && f.properties.pv !== undefined) metres.private += m;
       else metres.none += m;
       if (f.properties.u !== undefined) metres.u += m;
     }
-    const b_km = metres.b.map(m => m / 1000), none = metres.none / 1000;
-    return { k: b_km.reduce((a, x) => a + x, none), none, b: b_km, u: metres.u / 1000 };
+    const b_km = metres.b.map(m => m / 1000), none = metres.none / 1000, priv = metres.private / 1000;
+    return { k: b_km.reduce((a, x) => a + x, none + priv), none, private: priv, b: b_km, u: metres.u / 1000 };
   }
 
   function hexTotals() {
@@ -469,9 +552,10 @@
       cells = [statsCells.reduce((a, b) => (dist(a) <= dist(b) ? a : b))];
       where = "Around here";
     }
-    const totals = { k: 0, none: 0, b: BANDS.map(() => 0), u: 0 };
+    const totals = { k: 0, none: 0, private: 0, b: BANDS.map(() => 0), u: 0 };
     for (const c of cells) {
-      totals.k += c.k; totals.none += c.n + c.o; totals.u += c.u || 0;
+      // Overviews built before private ways were told apart have no "p"
+      totals.k += c.k; totals.none += c.n + c.o; totals.private += c.p || 0; totals.u += c.u || 0;
       totals.b.forEach((_, i) => { totals.b[i] += c[`b${i}`]; });
     }
     return { totals, where };
@@ -480,7 +564,7 @@
   function updateInView() {
     const target = document.getElementById("in-view");
     let totals = null, where = "In view", what = "of road and path", note = "";
-    if (map.getZoom() >= ROAD_STATS_ZOOM && map.getSource("roads")) {
+    if (!state.build && map.getZoom() >= ROAD_STATS_ZOOM && map.getSource("roads")) {
       totals = roadTotals();
       what = { all: "of road and path", roads: "of road", major: "of major road" }[state.type];
     } else if (statsCells.length) {
@@ -501,9 +585,10 @@
       ? `${where}: <strong>${fmt.format(totals.k)} km</strong> ${what}` +
         (note ? `<br><span class="small">${note}</span>` : "")
       : `No ${what.slice(3)} in view`) +
-      (state.fresh ? `<br>New imagery since the last update: ${newKm}` : "");
+      (highlighting() ? `<br>New imagery since the last update: ${newKm}` : "");
     legend.querySelectorAll("button").forEach(btn => {
-      const km = btn.dataset.key === "none" ? totals.none : totals.b[Number(btn.dataset.key)];
+      const key = btn.dataset.key;
+      const km = key === "none" || key === "private" ? totals[key] : totals.b[Number(key)];
       const pct = totals.k ? 100 * km / totals.k : 0;
       btn.querySelector(".pct").textContent = pct >= 0.5 || pct === 0 ? `${Math.round(pct)}%` : "<1%";
       btn.querySelector(".bar span").style.width = `${pct}%`;
@@ -636,6 +721,156 @@
     if (li) choose(Number(li.dataset.i));
   });
 
+  // --- Update digest and history -----------------------------------------------
+  // history/<area>.json lists every published update with its totals; each
+  // update's overview is kept, so a past one can be shown as hexagons.
+  const dayFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+  const shortDayFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  const stampDate = s => new Date(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)));
+  const kmText = km => (km < 10 ? km.toFixed(1) : fmt.format(km));
+  // Share of all ways with imagery under a year old, as of that update
+  const underAYear = b => (b.k ? 100 * (b.b0 + b.b1) / b.k : 0);
+  const updatesBox = document.getElementById("updates");
+  let viewing = 0;  // ignores a slow past overview once another has been picked
+
+  function shownBuild() {
+    return builds.find(b => b.stamp === state.build) || builds[builds.length - 1];
+  }
+
+  async function viewBuild(stamp) {
+    const latest = builds[builds.length - 1];
+    const entry = builds.find(b => b.stamp === stamp && b !== latest);
+    const ticket = ++viewing;
+    const data = entry ? await fetchJson(entry.overview, "past update") : latestOverview;
+    if (!data || ticket !== viewing) return;
+    state.build = entry ? entry.stamp : null;
+    refMonthIndex = entry && data.built ? monthIndexOf(data.built) : nowMonthIndex;
+    writeHash({ build: state.build });
+    map.getSource("hex").setData(data);
+    useOverview(data);
+    applyStyle();
+    updateInView();
+    renderUpdates();
+  }
+
+  function renderUpdates() {
+    updatesBox.hidden = !builds.length;
+    const banner = document.getElementById("viewing");
+    banner.hidden = !state.build;
+    if (!builds.length) return;
+    const b = shownBuild(), i = builds.indexOf(b), prev = builds[i - 1];
+    if (state.build) {
+      banner.innerHTML = `Showing the update of <strong>${dayFmt.format(stampDate(b.stamp))}</strong>, ` +
+        `as hexagons only. <button type="button" class="text-btn" data-latest>Back to latest</button>`;
+    }
+    const since = prev ? `the update of ${dayFmt.format(stampDate(prev.stamp))}` : "the update before";
+    document.getElementById("digest-head").innerHTML =
+      `${state.build ? "Update" : "Latest update"}, ${shortDayFmt.format(stampDate(b.stamp))}: ` +
+      (b.u !== undefined ? `<strong>${kmText(b.u)} km</strong> of new imagery` : "dates checked");
+    document.getElementById("digest-body").textContent = b.u === undefined
+      ? "New imagery is counted from the following update on."
+      : `Roads and paths with newer Street View than at ${since}.` +
+        ((b.top || []).length ? " Most of it was in these areas:" : "");
+    const areas = document.getElementById("top-areas");
+    areas.innerHTML = (b.top || []).map((a, n) => `<li><button type="button" data-i="${n}">
+      <span class="place">${a.y.toFixed(2)}, ${a.x.toFixed(2)}</span><span class="num">${kmText(a.km)} km</span></button></li>`).join("");
+    if (updatesBox.open) nameAreas();
+    document.getElementById("builds").innerHTML = builds.slice().reverse().map(x => `<li>
+      <button type="button" data-stamp="${escapeHtml(x.stamp)}" aria-current="${x === b}">
+        <span>${shortDayFmt.format(stampDate(x.stamp))}</span>
+        <span class="num">${Math.round(underAYear(x))}% under a year${x.u !== undefined ? ` · ${kmText(x.u)} km new` : ""}</span>
+      </button></li>`).join("");
+    drawTrend(b);
+  }
+
+  // Area names from Photon's reverse geocoder, fetched once the digest is opened
+  const placeNames = new Map();
+  function placeName(a) {
+    const key = `${a.x},${a.y}`;
+    if (!placeNames.has(key)) {
+      placeNames.set(key, fetch(`https://photon.komoot.io/reverse?lon=${a.x}&lat=${a.y}&lang=en`)
+        .then(r => r.json())
+        .then(j => {
+          const p = j.features?.[0]?.properties || {};
+          const parts = [p.city || p.locality || p.district || p.name, p.county || p.state].filter(Boolean);
+          return [...new Set(parts)].join(", ") || null;
+        })
+        // Forget a failure, so opening the digest again retries
+        .catch(() => { placeNames.delete(key); return null; }));
+    }
+    return placeNames.get(key);
+  }
+  async function nameAreas() {
+    const top = shownBuild()?.top || [];
+    // One at a time, to go easy on Photon's free service
+    for (const btn of document.querySelectorAll("#top-areas button")) {
+      if (!btn.isConnected) return;  // the digest has moved on to another update
+      const name = await placeName(top[Number(btn.dataset.i)]);
+      if (name && btn.isConnected) btn.querySelector(".place").textContent = name;
+    }
+  }
+  updatesBox.addEventListener("toggle", () => { if (updatesBox.open) nameAreas(); });
+
+  // Fly to an area and highlight its new imagery
+  document.getElementById("top-areas").addEventListener("click", e => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const a = shownBuild().top[Number(btn.dataset.i)];
+    if (!state.fresh) { fresh.checked = true; fresh.dispatchEvent(new Event("change")); }
+    map.flyTo({ center: [a.x, a.y], zoom: 9.5 });
+    if (window.matchMedia("(max-width: 640px)").matches) setPanelOpen(false);
+  });
+  document.getElementById("builds").addEventListener("click", e => {
+    const btn = e.target.closest("button");
+    if (btn) viewBuild(btn.dataset.stamp);
+  });
+  document.getElementById("viewing").addEventListener("click", e => {
+    if (e.target.closest("[data-latest]")) viewBuild(null);
+  });
+
+  // A line of the share under a year old across updates, with a crosshair
+  // that snaps to the nearest update; the list of updates is its table view
+  function drawTrend(selected) {
+    const fig = document.getElementById("trend"), svg = document.getElementById("trend-chart");
+    const pts = builds.filter(b => b.k);
+    fig.hidden = pts.length < 2;
+    if (fig.hidden) return;
+    const W = 272, H = 76, L = 34, R = 8, T = 8, B = 8;
+    const ts = pts.map(b => stampDate(b.stamp).getTime()), vs = pts.map(underAYear);
+    let lo = Math.floor(Math.min(...vs) / 5) * 5, hi = Math.ceil(Math.max(...vs) / 5) * 5;
+    if (hi === lo) hi = lo + 5;
+    const x = t => L + (W - L - R) * (t - ts[0]) / (ts[ts.length - 1] - ts[0] || 1);
+    const y = v => T + (H - T - B) * (hi - v) / (hi - lo);
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.innerHTML = [hi, lo].map(v => `
+      <line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>
+      <text class="axis" x="${L - 6}" y="${y(v)}" dy="0.35em" text-anchor="end">${v}%</text>`).join("") + `
+      <line class="crosshair" y1="${T}" y2="${H - B}" visibility="hidden"/>
+      <polyline class="line" points="${ts.map((t, i) => `${x(t)},${y(vs[i])}`).join(" ")}"/>
+      <circle class="dot" r="4"/>`;
+    const dot = svg.querySelector(".dot"), cross = svg.querySelector(".crosshair");
+    const readout = document.getElementById("trend-readout");
+    const show = i => {
+      dot.setAttribute("cx", x(ts[i]));
+      dot.setAttribute("cy", y(vs[i]));
+      readout.textContent = `${dayFmt.format(new Date(ts[i]))}: ${Math.round(vs[i])}% under a year old` +
+        (pts[i].u !== undefined ? `, ${kmText(pts[i].u)} km new` : "");
+    };
+    const rest = Math.max(0, pts.indexOf(selected));
+    show(rest);
+    svg.onpointermove = e => {
+      const r = svg.getBoundingClientRect();
+      const px = (e.clientX - r.left) * W / r.width;
+      let i = 0;
+      ts.forEach((t, j) => { if (Math.abs(x(t) - px) < Math.abs(x(ts[i]) - px)) i = j; });
+      cross.setAttribute("x1", x(ts[i]));
+      cross.setAttribute("x2", x(ts[i]));
+      cross.setAttribute("visibility", "visible");
+      show(i);
+    };
+    svg.onpointerleave = () => { cross.setAttribute("visibility", "hidden"); show(rest); };
+  }
+
   // --- Popups ----------------------------------------------------------------
   function describeAge(months) {
     if (months < 1) return "this month";
@@ -651,19 +886,21 @@
   }
 
   map.on("click", e => {
-    const layers = ["imagery", "no-imagery", "hex-coarse", "hex-fine"].filter(id => map.getLayer(id));
+    const layers = ["imagery", "no-imagery", "private", "hex-coarse", "hex-fine"].filter(id => map.getLayer(id));
     const f = map.queryRenderedFeatures(e.point, { layers })[0];
     if (!f) return;
     const p = f.properties;
     let html;
     if (f.layer.id.startsWith("hex")) {
-      const covered = p.k ? Math.round(100 * (p.k - p.n - p.o) / p.k) : 0;
+      const priv = Number(p.p) || 0;
+      const covered = p.k ? Math.round(100 * (p.k - p.n - p.o - priv) / p.k) : 0;
       const median = p.m === null || p.m === undefined || p.m === "null"
-        ? "No Google imagery" : `Median capture ${monthName(Number(p.m))} (${describeAge(nowMonthIndex - Number(p.m))})`;
+        ? "No Google imagery" : `Median capture ${monthName(Number(p.m))} (${describeAge(refMonthIndex - Number(p.m))})`;
       html = `<h2>This area</h2><div>${median}</div>
         <div>${fmt.format(p.k)} km of road and path, ${covered}% with Google imagery</div>
-        ${Number(p.u) > 0 ? `<div>${Number(p.u).toFixed(1)} km with new imagery since the last update</div>` : ""}
-        <div class="muted">Zoom in to see individual roads.</div>`;
+        ${priv >= 0.1 ? `<div>${kmText(priv)} km private with no imagery</div>` : ""}
+        ${Number(p.u) > 0 ? `<div>${Number(p.u).toFixed(1)} km with new imagery since the update before</div>` : ""}
+        <div class="muted">${state.build ? "As of this update. Go back to the latest to see roads." : "Zoom in to see individual roads."}</div>`;
     } else {
       const title = escapeHtml(p.name || p.hw.replace(/_/g, " "));
       let body;
@@ -675,8 +912,12 @@
           body += `<br><strong>New since the last update:</strong> ` +
             (Number(p.u) > 0 ? `previously ${monthName(Number(p.u))}` : "no Street View before");
         }
+        if (p.pv !== undefined) body += "<br>Private or no public access";
+      } else if (p.cov === "none" && p.pv !== undefined) {
+        body = "Private or no public access, so the Street View car doesn't usually go here";
       } else {
         body = p.cov === "other" ? "Only user-contributed photos here" : "No Street View imagery found";
+        if (p.pv !== undefined) body += "<br>Private or no public access";
       }
       const { lat, lng } = e.lngLat;
       // Open the panorama this stretch is dated by. Given only a point, Google
