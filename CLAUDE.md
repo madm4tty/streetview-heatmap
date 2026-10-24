@@ -40,8 +40,9 @@ python3 -m pipeline.run overview --area uk              # merge shard hexagon ta
 - `pipeline/refresh.py`: monthly refresh via one sentinel per 250 m cell
 - `pipeline/export.py`: GeoJSONSeq and tippecanoe
 - `pipeline/overview.py`: H3 hexagon tallies per area, merged into the overview the page shows at low zoom
-- `pipeline/publish.py`: R2 upload under a secret prefix, and state sync
-- `pipeline/web/index.html`: MapLibre page; `DEFAULT_TILES` and `DEFAULT_OVERVIEW` are rewritten by `publish`
+- `pipeline/publish.py`: R2 upload under a secret prefix, the build history (`history/`), and state sync
+- `pipeline/web/index.html`: MapLibre page; `DEFAULT_TILES`, `DEFAULT_OVERVIEW` and `DEFAULT_HISTORY` are rewritten
+  by `publish`
 - `pipeline/data/`: downloads, cache and build output (gitignored)
 
 ## Conventions
@@ -72,8 +73,10 @@ python3 -m pipeline.run overview --area uk              # merge shard hexagon ta
   opt-in toggle (owner's choice, 2026-10-24, although the classic palette fails the palette checks).
 - Open decision: what to do about path imagery (Google Trekker imagery is also "© Google", so parks can show dated
   imagery even though the aim is car imagery only).
-- Not built yet: a council league table (ONS boundaries). The "new imagery" highlight compares each build with the
-  result saved by the one before it, so it shows what changed between consecutive builds (monthly once on schedule).
+- Not built yet: a council league table (ONS boundaries; owner unsure it's worth it). The "new imagery" highlight
+  compares each build with the result saved by the one before it, so it shows what changed between consecutive
+  builds (monthly once on schedule). The update digest and history start with the first build published after
+  they were added; earlier builds have no history entry.
 - Owner to-dos outside the repo: Google project budget alert, Cloudflare two-factor login, optionally disable the
   Maps Static API, delete the unused `GMAPS_APIKEY_REPO` secret, and shut down the old Flask app if it still runs
   anywhere.
