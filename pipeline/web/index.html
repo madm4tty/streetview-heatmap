@@ -9,8 +9,19 @@
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <script src="https://unpkg.com/pmtiles@4.5.0/dist/pmtiles.js"></script>
+<script>
+  // Settle the theme before anything is drawn, so the page never flashes the
+  // other one: a choice saved on this device, or else the device's setting
+  (function () {
+    let saved = null;
+    try { saved = localStorage.getItem("theme"); } catch (err) { /* storage blocked */ }
+    document.documentElement.dataset.theme = saved === "light" || saved === "dark" ? saved
+      : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  })();
+</script>
 <style>
   :root {
+    color-scheme: light;
     --panel-bg: #ffffff;
     --panel-fg: #1f2937;
     --muted: #6b7280;
@@ -18,19 +29,20 @@
     --track: #eef0f3;
     --hover: #f3f4f6;
     --accent: #2563eb;
+    --map-bg: #f2f3f0;  /* the base map's background, shown while it loads */
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --panel-bg: #111827;
-      --panel-fg: #f3f4f6;
-      --muted: #9ca3af;
-      --border: #374151;
-      --track: #273142;
-      --hover: #1f2937;
-      --accent: #60a5fa;
-    }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --panel-bg: #111827;
+    --panel-fg: #f3f4f6;
+    --muted: #9ca3af;
+    --border: #374151;
+    --track: #273142;
+    --hover: #1f2937;
+    --accent: #60a5fa;
+    --map-bg: #0c0c0c;
   }
-  html, body { margin: 0; height: 100%; background: #f2f3f0; }
+  html, body { margin: 0; height: 100%; background: var(--map-bg); }
   body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
   #map { position: absolute; inset: 0; }
 
@@ -101,7 +113,14 @@
     font: inherit; color: inherit; background: transparent; padding: 4px 6px;
     border: 1px solid var(--border); border-radius: 6px; min-height: 32px;
   }
-  .controls select option { color: #1f2937; }
+  /* Theme: three segments over radio buttons, so arrow keys work as usual */
+  .theme-row { display: flex; gap: 8px; align-items: center; min-height: 28px; }
+  .segmented { display: flex; flex: 1; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .segmented input { position: absolute; opacity: 0; pointer-events: none; }
+  .segmented label { flex: 1; justify-content: center; min-height: 30px; cursor: pointer; font-size: 13px; }
+  .segmented label + input + label { border-left: 1px solid var(--border); }
+  .segmented input:checked + label { background: var(--track); font-weight: 600; }
+  .segmented input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: -2px; }
   #as-of { margin: 10px 0 0; }
 
   /* Update digest and history */
@@ -127,9 +146,25 @@
   #trend-chart .dot { fill: var(--accent); stroke: var(--panel-bg); stroke-width: 2; }
   #trend-chart .crosshair { stroke: var(--muted); stroke-width: 1; }
 
-  .maplibregl-popup-content { font: 13px/1.4 system-ui, sans-serif; color: #1f2937; }
+  .maplibregl-popup-content { font: 13px/1.4 system-ui, sans-serif; color: var(--panel-fg); background: var(--panel-bg); }
   .maplibregl-popup-content h2 { font-size: 14px; margin: 0 0 4px; }
-  .maplibregl-popup-content a { display: inline-block; margin-top: 6px; }
+  .maplibregl-popup-content a { display: inline-block; margin-top: 6px; color: var(--accent); }
+  .maplibregl-popup-close-button { color: var(--panel-fg); }
+  /* The popup's pointer is a coloured border on the side facing the map */
+  .maplibregl-popup-anchor-top .maplibregl-popup-tip, .maplibregl-popup-anchor-top-left .maplibregl-popup-tip,
+  .maplibregl-popup-anchor-top-right .maplibregl-popup-tip { border-bottom-color: var(--panel-bg); }
+  .maplibregl-popup-anchor-bottom .maplibregl-popup-tip, .maplibregl-popup-anchor-bottom-left .maplibregl-popup-tip,
+  .maplibregl-popup-anchor-bottom-right .maplibregl-popup-tip { border-top-color: var(--panel-bg); }
+  .maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--panel-bg); }
+  .maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--panel-bg); }
+  /* Map controls in the dark theme; the icons are dark images, so invert them
+     (the hue turn keeps the locate button's blue blue) */
+  [data-theme="dark"] .maplibregl-ctrl-group,
+  [data-theme="dark"] .maplibregl-ctrl.maplibregl-ctrl-attrib { background: var(--panel-bg); color: var(--panel-fg); }
+  [data-theme="dark"] .maplibregl-ctrl-group button + button { border-top-color: var(--border); }
+  [data-theme="dark"] .maplibregl-ctrl button .maplibregl-ctrl-icon,
+  [data-theme="dark"] .maplibregl-ctrl-attrib-button { filter: invert(1) hue-rotate(180deg); }
+  [data-theme="dark"] .maplibregl-ctrl-attrib a { color: var(--panel-fg); }
 
   /* Phones: the panel becomes a drawer along the bottom, closed to start with */
   @media (max-width: 640px) {
@@ -173,6 +208,14 @@
       </label>
       <label><input type="checkbox" id="cvd"> Colour-blind safe colours</label>
       <label id="new-control" hidden><input type="checkbox" id="new"> Highlight new imagery since the last update</label>
+      <div class="theme-row">
+        <span id="theme-title">Theme</span>
+        <span class="segmented" role="radiogroup" aria-labelledby="theme-title">
+          <input type="radio" name="theme" id="theme-system" value="system"><label for="theme-system">Device</label>
+          <input type="radio" name="theme" id="theme-light" value="light"><label for="theme-light">Light</label>
+          <input type="radio" name="theme" id="theme-dark" value="dark"><label for="theme-dark">Dark</label>
+        </span>
+      </div>
     </div>
     <details class="updates" id="updates" hidden>
       <summary id="digest-head"></summary>
@@ -205,6 +248,13 @@
     // vermilion, wine. Distinct hues chosen to stay apart for colour-blind
     // viewers; passes the categorical palette checks on every pair
     cvd: ["#0072B2", "#56B4E9", "#009E73", "#E69F00", "#D55E00", "#882255"],
+  };
+  // On the dark map the wine is too dark to see (2.2:1); this lighter one keeps
+  // every pair apart for colour-blind viewers and reaches 3:1
+  const DARK_PALETTES = { ...PALETTES, cvd: [...PALETTES.cvd.slice(0, -1), "#A23B72"] };
+  const MAP_STYLES = {
+    light: "https://tiles.openfreemap.org/styles/positron",
+    dark: "https://tiles.openfreemap.org/styles/dark",
   };
   const NO_IMAGERY_COLOR = "#9ca3af";
   // Match PATH_HIGHWAYS in pipeline/roads.py; "roads only" also leaves out service roads
@@ -262,6 +312,17 @@
     build: /^\d{8}-\d{6}$/.test(initial.get("build") || "") ? initial.get("build") : null,
   };
 
+  // Theme: "system" follows the device. Kept on this device only, not in shared
+  // links, since it's the viewer's preference rather than part of the view.
+  const THEMES = ["system", "light", "dark"];
+  const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+  let themeChoice = "system";
+  try { if (THEMES.includes(localStorage.getItem("theme"))) themeChoice = localStorage.getItem("theme"); }
+  catch (err) { /* storage blocked: follow the device */ }
+  const effectiveTheme = () => (themeChoice === "system" ? (darkQuery.matches ? "dark" : "light") : themeChoice);
+  let mapTheme = effectiveTheme();  // the theme of the base map style now loaded
+  const currentPalette = () => (mapTheme === "dark" ? DARK_PALETTES : PALETTES)[state.palette];
+
   // Ages are worked out against today's date in the browser, so the
   // tiles never need rebuilding just because time has passed.
   const now = new Date();
@@ -315,7 +376,7 @@
     </button></li>`).join("");
 
   function paintLegend() {
-    const palette = PALETTES[state.palette];
+    const palette = currentPalette();
     legend.querySelectorAll("button").forEach(btn => {
       const color = btn.dataset.key in SWATCH_CLASS ? NO_IMAGERY_COLOR : palette[Number(btn.dataset.key)];
       btn.querySelector(".swatch").style.background = color;
@@ -329,7 +390,7 @@
 
   const map = new maplibregl.Map({
     container: "map",
-    style: "https://tiles.openfreemap.org/styles/positron",
+    style: MAP_STYLES[mapTheme],
     center: [-3.2, 54.6],
     zoom: 6,
     hash: "map",
@@ -397,9 +458,14 @@
   }
 
   function applyStyle() {
-    const palette = PALETTES[state.palette];
+    paintLegend();
+    if (!map.getLayer("imagery")) return;  // a new base map is still loading
+    const palette = currentPalette();
+    const dark = mapTheme === "dark";
     // A past update has hexagons only: the road tiles are always the latest
     const past = Boolean(state.build);
+    // The casing round new imagery stands out against the base map
+    map.setPaintProperty("new-imagery", "line-color", dark ? "#f9fafb" : "#111827");
     for (const id of ["imagery", "no-imagery", "private"]) map.setPaintProperty(id, "line-opacity", roadOpacity());
     map.setFilter("new-imagery", ["all", isNew, typeFilter()]);
     map.setLayoutProperty("new-imagery", "visibility", highlighting() && !past ? "visible" : "none");
@@ -420,20 +486,24 @@
         map.setFilter(id, ["all", ["==", ["get", "r"], id === "hex-coarse" ? 5 : 6], hexShown]);
         map.setPaintProperty(id, "fill-color", hexColor);
         map.setPaintProperty(id, "fill-opacity", hexOpacity(id === "hex-fine" && !past));
+        map.setPaintProperty(id, "fill-outline-color", dark ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.6)");
       }
       // Past updates keep their hexagons at every zoom, with no roads to hand over to
       map.setLayerZoomRange("hex-fine", 6.5, past ? 24 : HANDOFF_ZOOM + 1.5);
     }
-    paintLegend();
   }
 
-  map.on("load", async () => {
-    const [loaded, history] = await Promise.all([
-      fetchJson(overviewUrl, "overview, showing roads at every zoom"),
-      fetchJson(historyUrl, "update history yet")]);
-    overview = latestOverview = loaded;
-    builds = (overview && history?.builds) || [];
-    const firstLabel = map.getStyle().layers.find(l => l.type === "symbol")?.id;
+  // Our sources and layers, under the base map's labels. Run once the data has
+  // loaded, and again after each change of base map, which drops them.
+  let dataLoaded = false;
+  function addDataLayers() {
+    if (!dataLoaded || map.getSource("roads")) return;
+    // Above every road, building and boundary in the base map, below the labels
+    // that follow them. Not simply the first label: the dark style has water
+    // names low down, under its buildings.
+    const base = map.getStyle().layers;
+    const lastShape = base.findLastIndex(l => l.type !== "symbol");
+    const firstLabel = base.slice(lastShape + 1).find(l => l.type === "symbol")?.id;
 
     // With an overview, roads start at the handoff zoom, so no road tiles are
     // fetched for the zoomed-out view at all
@@ -446,11 +516,9 @@
     });
     if (overview) {
       map.addSource("hex", { type: "geojson", data: overview });
-      map.addLayer({ id: "hex-coarse", type: "fill", source: "hex", maxzoom: 6.5,
-                     paint: { "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
-      map.addLayer({ id: "hex-fine", type: "fill", source: "hex", minzoom: 6.5, maxzoom: HANDOFF_ZOOM + 1.5,
-                     paint: { "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
-      useOverview(overview);
+      map.addLayer({ id: "hex-coarse", type: "fill", source: "hex", maxzoom: 6.5 }, firstLabel);
+      map.addLayer({ id: "hex-fine", type: "fill", source: "hex", minzoom: 6.5, maxzoom: HANDOFF_ZOOM + 1.5 },
+                   firstLabel);
     }
     map.addLayer({
       id: "no-imagery", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
@@ -463,11 +531,11 @@
       paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [0, 2] },
       layout: { "line-cap": "round" },
     }, firstLabel);
-    // A dark casing under roads with new imagery, shown while highlighting
+    // A casing under roads with new imagery, shown while highlighting
     map.addLayer({
       id: "new-imagery", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
       filter: isNew,
-      paint: { "line-color": "#111827", "line-width": haloWidth,
+      paint: { "line-width": haloWidth,
                "line-opacity": overview ? ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, 0, HANDOFF_ZOOM + 1.5, 0.9] : 0.9 },
       layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
     }, firstLabel);
@@ -477,12 +545,25 @@
       paint: { "line-width": widthExpr },
       layout: { "line-cap": "round", "line-join": "round" },
     }, firstLabel);
+    applyStyle();
+  }
 
-    for (const id of ["imagery", "no-imagery", "private", "hex-coarse", "hex-fine"].filter(l => map.getLayer(l))) {
+  map.on("load", async () => {
+    const [loaded, history] = await Promise.all([
+      fetchJson(overviewUrl, "overview, showing roads at every zoom"),
+      fetchJson(historyUrl, "update history yet")]);
+    overview = latestOverview = loaded;
+    builds = (overview && history?.builds) || [];
+    if (overview) useOverview(overview);
+    // The theme may have changed while the data loaded: wait for that base map
+    if (!styleReady) await new Promise(resolve => map.once("style.load", resolve));
+    dataLoaded = true;
+    addDataLayers();
+    // Registered once: these follow the layer ids across changes of base map
+    for (const id of ["imagery", "no-imagery", "private", "hex-coarse", "hex-fine"]) {
       map.on("mouseenter", id, () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", id, () => { map.getCanvas().style.cursor = ""; });
     }
-    applyStyle();
     updateInView();
     if (state.build) await viewBuild(state.build);
     renderUpdates();
@@ -649,6 +730,32 @@
   });
   paintLegend();
 
+  // --- Theme -------------------------------------------------------------------
+  // Changing theme swaps the base map style, which drops our sources and layers;
+  // they go back on once the new style has loaded.
+  let styleReady = true;  // false while a new base map style loads
+  map.on("style.load", () => { styleReady = true; addDataLayers(); });
+  function applyTheme() {
+    const theme = effectiveTheme();
+    document.documentElement.dataset.theme = theme;
+    if (theme === mapTheme) return;
+    mapTheme = theme;
+    styleReady = false;
+    // A full reload rather than a diff, so "style.load" fires
+    map.setStyle(MAP_STYLES[theme], { diff: false });
+    paintLegend();
+  }
+  document.getElementById(`theme-${themeChoice}`).checked = true;
+  document.querySelectorAll('input[name="theme"]').forEach(input => input.addEventListener("change", () => {
+    themeChoice = input.value;
+    try {
+      if (themeChoice === "system") localStorage.removeItem("theme");
+      else localStorage.setItem("theme", themeChoice);
+    } catch (err) { /* storage blocked: the choice lasts until the page closes */ }
+    applyTheme();
+  }));
+  darkQuery.addEventListener("change", () => { if (themeChoice === "system") applyTheme(); });
+
   const panel = document.getElementById("panel");
   const toggle = document.getElementById("toggle-panel");
   function setPanelOpen(open) {
@@ -746,7 +853,7 @@
     state.build = entry ? entry.stamp : null;
     refMonthIndex = entry && data.built ? monthIndexOf(data.built) : nowMonthIndex;
     writeHash({ build: state.build });
-    map.getSource("hex").setData(data);
+    map.getSource("hex")?.setData(data);  // absent while a new base map loads; re-added with `overview`
     useOverview(data);
     applyStyle();
     updateInView();
