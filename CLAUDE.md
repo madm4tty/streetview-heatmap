@@ -63,8 +63,8 @@ python3 -m pipeline.run overview --area uk              # merge shard hexagon ta
 - Live: the whole UK, published to R2 by the monthly Build map workflow (2nd of each month, 04:23 UTC). Page-only
   changes go live within a minute of reaching `main` via the Deploy page workflow. First full
   build 2026-10-23 took 14 h (60–104 min of lookups per shard); a refresh takes about 2 h 45 min (7–11 min per shard).
-  Tiles are about 830 MB per version, the overview 2.9 MB (0.5 MB compressed), R2 total about 2.6 GB of the 10 GB
-  free tier.
+  Tiles are about 830 MB per version (expect about 1 GB once builds include panorama IDs), the overview 2.9 MB
+  (0.5 MB compressed), R2 total about 2.6 GB of the 10 GB free tier.
 - Cloud sessions can't download from Geofabrik (the proxy drops the connection), so real builds run on GitHub
   Actions. The site's Cloudflare zone blocks non-browser user agents (error 1010): send a browser User-Agent when
   checking it from scripts.

@@ -1,6 +1,7 @@
 """Tests for the batch pipeline (pipeline/). No network or osmium needed."""
 
 import asyncio
+import json
 import gzip
 import os
 from datetime import datetime, timezone
@@ -9,11 +10,12 @@ import pytest
 
 from pipeline import areas, measure, overview, publish, run, shards
 from pipeline.cache import Lookup, MetadataCache, make_key
-from pipeline.export import agreement_by_length, month_index, piece_properties
+from pipeline.export import (agreement_by_length, month_index, piece_panos, piece_properties,
+                             write_geojsonseq)
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
 from pipeline.refresh import refresh
 from pipeline.roads import Segment, include_way
-from pipeline.sampler import (PATH_RADIUS_M, ROAD_RADIUS_M, Piece, merge_pieces,
+from pipeline.sampler import (PATH_RADIUS_M, ROAD_RADIUS_M, Piece, key_at, merge_pieces,
                               min_bisect_lookups, radius_for, sample_bisect, sample_dense)
 from pipeline.streetview import (NO_COVERAGE, NON_GOOGLE, BudgetExceeded, RateLimiter,
                                  StreetViewClient, classify)
@@ -661,3 +663,38 @@ class TestPublishPage:
         with pytest.raises(SystemExit):
             publish.publish_page(client, "site", self.PREFIX, "uk", self._index(tmp_path))
         assert client.calls == []
+
+
+class TestPanoramaLinks:
+    def _cache(self, tmp_path, entries):
+        cache = MetadataCache(str(tmp_path / "c.sqlite"))
+        cache.put_many([(key, Lookup("OK", pano, date, 53.8, -1.55, "© 2026 Google"))
+                        for key, pano, date in entries])
+        return cache
+
+    def test_takes_the_pano_at_a_sample_point_with_the_pieces_date(self, tmp_path):
+        seg = _road()
+        start, end = key_at(seg, 10), key_at(seg, seg.length - 10)
+        cache = self._cache(tmp_path, [(start, "OTHER", "2019-08"), (end, "WANTED", "2023-05")])
+        piece = Piece(seg.id, 0, seg.length, "2023-05")  # ends extended to the segment ends
+        assert piece_panos([piece], [seg], cache) == ["WANTED"]
+
+    def test_no_imagery_and_no_match_give_none(self, tmp_path):
+        seg = _road()
+        cache = self._cache(tmp_path, [(key_at(seg, 10), "P", "2019-08")])
+        pieces = [Piece(seg.id, 0, 500, "2023-05"), Piece(seg.id, 500, seg.length, NO_COVERAGE)]
+        assert piece_panos(pieces, [seg], cache) == [None, None]
+
+    def test_short_segment_uses_its_middle(self, tmp_path):
+        seg = _road(coords=(START, (53.8, -1.5497)))  # about 20 m
+        cache = self._cache(tmp_path, [(key_at(seg, seg.length / 2), "MID", "2024-01")])
+        assert piece_panos([Piece(seg.id, 0, seg.length, "2024-01")], [seg], cache) == ["MID"]
+
+    def test_pano_goes_into_the_tile_properties(self, tmp_path):
+        seg = _road()
+        out = tmp_path / "x.geojsonl"
+        pieces = [Piece(seg.id, 0, 500, "2023-05"), Piece(seg.id, 500, seg.length, NO_COVERAGE)]
+        write_geojsonseq(pieces, [seg], str(out), ["PANO1", None])
+        lines = [json.loads(line) for line in out.read_text().splitlines()]
+        assert lines[0]["properties"]["pano"] == "PANO1"
+        assert "pano" not in lines[1]["properties"]
