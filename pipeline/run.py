@@ -8,6 +8,7 @@ Usage:
     python3 -m pipeline.run tiles    --area leeds --mode bisect
     python3 -m pipeline.run refresh  --area leeds          # monthly update
     python3 -m pipeline.run publish  --area leeds          # upload the site to R2
+    python3 -m pipeline.run publish-page --area uk         # upload only the page, for page-only changes
     python3 -m pipeline.run pull-state --area leeds        # restore cache from R2
     python3 -m pipeline.run push-state --area leeds        # save cache to R2
     python3 -m pipeline.run measure  --pbf uk.osm.pbf      # size up a big extract, no API calls
@@ -290,6 +291,13 @@ def cmd_publish(args) -> None:
     print(f"\nPublished {publish.redact(page, prefix)} to the {bucket} bucket")
 
 
+def cmd_publish_page(args) -> None:
+    bucket, prefix = publish.site_bucket(), publish.site_prefix()
+    index = os.path.join(PIPELINE_DIR, "web", "index.html")
+    _, tiles, overview = publish.publish_page(publish.r2_client(bucket), bucket, prefix, args.area, index)
+    print(f"\nPublished the page, using {tiles}" + (f" and {overview}" if overview else " (no overview)"))
+
+
 def cmd_pull_state(args) -> None:
     bucket = publish.state_bucket()
     written = publish.pull_state(publish.r2_client(bucket), bucket, state_paths(args.area),
@@ -309,7 +317,7 @@ def main(argv=None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name in ("download", "estimate", "sample", "compare", "tiles", "refresh",
-                 "publish", "pull-state", "push-state", "overview"):
+                 "publish", "publish-page", "pull-state", "push-state", "overview"):
         p = sub.add_parser(name)
         p.add_argument("--area", required=True, choices=sorted(areas.AREAS))
         if name in ("sample", "tiles"):
@@ -350,7 +358,7 @@ def main(argv=None) -> None:
     {"download": cmd_download, "estimate": cmd_estimate, "sample": cmd_sample,
      "compare": cmd_compare, "tiles": cmd_tiles, "refresh": cmd_refresh,
      "publish": cmd_publish, "pull-state": cmd_pull_state,
-     "push-state": cmd_push_state, "measure": cmd_measure,
+     "publish-page": cmd_publish_page, "push-state": cmd_push_state, "measure": cmd_measure,
      "overview": cmd_overview}[args.command](args)
 
 

@@ -625,3 +625,39 @@ class TestFullRebuild:
         assert seen["max_age_days"] == 25
         run.main(["sample", "--area", "uk-3"])
         assert seen["max_age_days"] is None
+
+
+class TestPublishPage:
+    PREFIX = "k7f3q9x2v8m1w4z6"
+
+    def _index(self, tmp_path):
+        path = tmp_path / "index.html"
+        path.write_text(PAGE)
+        return str(path)
+
+    def test_points_page_at_newest_version_and_uploads_nothing_else(self, tmp_path):
+        p = self.PREFIX
+        client = FakeR2({k: {"Body": b"x"} for k in (
+            f"{p}/tiles/uk-20261023-205701.pmtiles",
+            f"{p}/tiles/uk-20261024-003008.pmtiles",
+            f"{p}/tiles/uk-20261024-003008.overview.json",
+            f"{p}/tiles/leeds-20261101-000000.pmtiles",
+        )})
+        page, tiles, ov = publish.publish_page(client, "site", p, "uk", self._index(tmp_path))
+        assert (tiles, ov) == ("tiles/uk-20261024-003008.pmtiles", "tiles/uk-20261024-003008.overview.json")
+        assert client.calls == [("put", f"{p}/index.html")]
+        body = client.objects[page]["Body"]
+        assert b'DEFAULT_TILES = "tiles/uk-20261024-003008.pmtiles"' in body
+        assert b'DEFAULT_OVERVIEW = "tiles/uk-20261024-003008.overview.json"' in body
+
+    def test_version_without_overview(self, tmp_path):
+        p = self.PREFIX
+        client = FakeR2({f"{p}/tiles/uk-20261023-205701.pmtiles": {"Body": b"x"}})
+        _, tiles, ov = publish.publish_page(client, "site", p, "uk", self._index(tmp_path))
+        assert ov == "" and tiles.endswith("205701.pmtiles")
+
+    def test_nothing_published_yet(self, tmp_path):
+        client = FakeR2()
+        with pytest.raises(SystemExit):
+            publish.publish_page(client, "site", self.PREFIX, "uk", self._index(tmp_path))
+        assert client.calls == []

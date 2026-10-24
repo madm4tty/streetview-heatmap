@@ -196,15 +196,39 @@ def publish_site(client, bucket: str, prefix: str, area: str, site_dir: str,
         client.upload_file(path, bucket, f"{prefix}/{key}", ExtraArgs={
             "ContentType": content_type, "CacheControl": IMMUTABLE})
 
+    page_object = upload_page(client, bucket, prefix, index, tiles, overview if has_overview else "")
+    prune_tiles(client, bucket, prefix, area)
+    return page_object
+
+
+def upload_page(client, bucket: str, prefix: str, index: str, tiles: str, overview: str) -> str:
+    """Upload index.html pointing at the given data files. Returns the page's key."""
     with open(index, encoding="utf-8") as f:
-        page = point_page_at(f.read(), tiles, overview if has_overview else "")
+        page = point_page_at(f.read(), tiles, overview)
     page_object = f"{prefix}/index.html"
     client.put_object(Bucket=bucket, Key=page_object, Body=page.encode("utf-8"),
                       ContentType="text/html; charset=utf-8", CacheControl=NO_CACHE)
     logger.info("Uploaded %s", redact(page_object, prefix))
-
-    prune_tiles(client, bucket, prefix, area)
     return page_object
+
+
+def publish_page(client, bucket: str, prefix: str, area: str, index: str) -> Tuple[str, str, str]:
+    """Upload just the page, pointed at the newest data already published for `area`.
+
+    For page-only changes: no lookups, tiles or overview are rebuilt, and no old
+    versions are pruned. Returns the page's key and the tiles and overview paths
+    it now uses.
+    """
+    if not os.path.exists(index):
+        raise SystemExit(f"{index} not found")
+    for version in reversed(area_versions(client, bucket, prefix, area)):
+        keys = {o["Key"][len(prefix) + 1:] for o in version}  # relative to the page
+        tiles = next((k for k in keys if k.endswith(".pmtiles")), None)
+        if tiles:
+            overview = tiles[:-len(".pmtiles")] + ".overview.json"
+            overview = overview if overview in keys else ""
+            return upload_page(client, bucket, prefix, index, tiles, overview), tiles, overview
+    raise SystemExit(f"Nothing published for '{area}' yet: run a full build first.")
 
 
 def _is_missing(exc: Exception) -> bool:

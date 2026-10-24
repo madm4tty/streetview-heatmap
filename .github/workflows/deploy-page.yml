@@ -1,0 +1,43 @@
+name: Deploy page
+
+# Publishes just pipeline/web/index.html, pointed at the newest tiles and overview
+# already in R2. Runs when the page changes on main, or by hand from the Actions
+# tab. Takes about a minute: no lookups, no tile building, nothing pruned.
+#
+# A page change that needs data the tiles don't have yet (a new road property,
+# say) only works after the next Build map run.
+on:
+  push:
+    branches: [main]
+    paths:
+      - pipeline/web/**
+      - .github/workflows/deploy-page.yml
+  workflow_dispatch:
+
+# If two page changes land close together, only the newest needs deploying
+concurrency:
+  group: deploy-page
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_SITE_PREFIX: ${{ secrets.R2_SITE_PREFIX }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python3 -m pip install -r pipeline/requirements.txt
+
+      - run: python3 -m pipeline.run publish-page --area uk

@@ -80,9 +80,12 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   by the median capture date of their roads. Roads fade in from zoom 8 to 9.5, and no road tiles are fetched below
   zoom 8. `tiles` writes each area's hexagon tallies (`<area>.hexstats.json`); for the UK, `overview --area uk` merges
   the shards' tallies into `uk.overview.json` (about 0.5 MB compressed).
-- **"In view" panel**: the legend rows show each age band's share of road length in the current view, from the
-  hexagons whose centres are on screen. Clicking a row hides or shows that band. Shares are as of the build month and
-  always cover all ways.
+- **"In view" panel**: the legend rows show each age band's share of road length in the current view. Below zoom 11
+  the shares come from the hexagons whose centres are on screen (as of the build month, all ways). From zoom 11 they
+  come from the roads drawn in the window, each clipped to its edges, under the current road-type filter. Bands with
+  nothing in view get a grey background. Clicking a row hides or shows that band. Counting roads costs about 300 ms
+  after each move at zoom 11–12 in central London (on a slow test machine) and a few ms at street level; raise
+  `ROAD_STATS_ZOOM` in the page if that ever feels sluggish.
 - **Filters**: all ways, roads only (no paths, tracks or service roads), or major roads.
 - **Colour-blind friendly colours**: a single-hue blue ramp that passes the ordinal palette checks against the base
   map. The default green-to-red palette fails them (lime and green are too close even with normal colour vision).
@@ -185,6 +188,21 @@ running the workflow again resumes where it stopped. The first full run takes 10
 | Yes | either | `sample --max-age-days 25`: every road, re-asking lookups older than 25 days |
 
 Scheduled runs never tick the box, so they always refresh once a shard has a result.
+
+### Page-only changes
+
+Changes to `pipeline/web/` (the panel, colours, layout) don't need new data. When one reaches `main`, the
+**Deploy page** workflow (`.github/workflows/deploy-page.yml`) runs `publish-page --area uk`: it points the page at the
+newest tiles and overview already in R2 and uploads only `index.html`, in about a minute. It can also be started by
+hand from the Actions tab.
+
+```bash
+.venv/bin/python -m pipeline.run publish-page --area uk
+```
+
+Build map's publish step also takes the page from the latest `main` rather than the commit it started from, so a long
+build never puts back an older page. A page change that needs data the tiles don't have yet (a new road property)
+only works after the next Build map run.
 
 ### Full rebuild
 
