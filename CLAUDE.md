@@ -56,3 +56,21 @@ python3 -m pipeline.run overview --area uk              # merge shard hexagon ta
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`: R2 API token
 - `R2_SITE_PREFIX`: secret folder the site is published under
 - `R2_BUCKET`, `R2_STATE_BUCKET`: optional bucket name overrides
+
+## Current state and open items (October 2026)
+
+- Live: the whole UK, published to R2 by the monthly Build map workflow (2nd of each month, 04:23 UTC). First full
+  build 2026-10-23 took 14 h (60–104 min of lookups per shard); a refresh takes about 2 h 45 min (7–11 min per shard).
+  Tiles are about 830 MB per version, the overview 2.9 MB (0.5 MB compressed), R2 total about 2.6 GB of the 10 GB
+  free tier.
+- Cloud sessions can't download from Geofabrik (the proxy drops the connection), so real builds run on GitHub
+  Actions. The site's Cloudflare zone blocks non-browser user agents (error 1010): send a browser User-Agent when
+  checking it from scripts.
+- Open decisions: make the colour-blind palette the default (the classic green-to-red fails the ordinal palette
+  checks); what to do about path imagery (Google Trekker imagery is also "© Google", so parks can show dated
+  imagery even though the aim is car imagery only).
+- Not built yet: an "updated this month" highlight (store each road's previous date) and a council league table
+  (ONS boundaries).
+- Owner to-dos outside the repo: Google project budget alert, Cloudflare two-factor login, optionally disable the
+  Maps Static API, delete the unused `GMAPS_APIKEY_REPO` secret, and shut down the old Flask app if it still runs
+  anywhere.

@@ -80,9 +80,12 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   by the median capture date of their roads. Roads fade in from zoom 8 to 9.5, and no road tiles are fetched below
   zoom 8. `tiles` writes each area's hexagon tallies (`<area>.hexstats.json`); for the UK, `overview --area uk` merges
   the shards' tallies into `uk.overview.json` (about 0.5 MB compressed).
-- **"In view" panel**: the legend rows show each age band's share of road length in the current view, from the
-  hexagons whose centres are on screen. Clicking a row hides or shows that band. Shares are as of the build month and
-  always cover all ways.
+- **"In view" panel**: the legend rows show each age band's share of road length in the current view. Below zoom 11
+  the shares come from the hexagons whose centres are on screen (as of the build month, all ways). From zoom 11 they
+  come from the roads drawn in the window, each clipped to its edges, under the current road-type filter. Bands with
+  nothing in view get a grey background. Clicking a row hides or shows that band. Counting roads costs about 300 ms
+  after each move at zoom 11–12 in central London (on a slow test machine) and a few ms at street level; raise
+  `ROAD_STATS_ZOOM` in the page if that ever feels sluggish.
 - **Filters**: all ways, roads only (no paths, tracks or service roads), or major roads.
 - **Colour-blind friendly colours**: a single-hue blue ramp that passes the ordinal palette checks against the base
   map. The default green-to-red palette fails them (lime and green are too close even with normal colour vision).

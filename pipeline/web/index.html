@@ -80,6 +80,9 @@
   .legend button[aria-pressed="false"] .pct { color: var(--muted); text-decoration: line-through; }
   .legend button[aria-pressed="false"] .swatch,
   .legend button[aria-pressed="false"] .bar span { opacity: 0.25; }
+  /* Nothing of this band in view */
+  .legend button.absent { background: var(--track); }
+  .legend button.absent .label, .legend button.absent .pct { color: var(--muted); }
   .swatch { width: 22px; height: 5px; border-radius: 3px; grid-row: 1; }
   .swatch.dashed {
     background: repeating-linear-gradient(90deg, #9ca3af 0 5px, transparent 5px 8px) !important;
@@ -358,40 +361,121 @@
   });
 
   // --- "In view" numbers ---------------------------------------------------
+  // Zoomed out, the shares come from the overview hexagons. From zoom 11, where
+  // the window is at most a few hexagons wide, they come from the roads
+  // themselves: the length of each one inside the window, under the current
+  // road-type filter.
+  const ROAD_STATS_ZOOM = 11;
+  const EARTH_RADIUS_M = 6371008.8;
   const fmt = new Intl.NumberFormat("en-GB", { maximumFractionDigits: 0 });
 
-  function updateInView() {
-    const target = document.getElementById("in-view");
-    if (!statsCells.length) {
-      target.textContent = "";
-      legend.querySelectorAll(".pct").forEach(el => { el.textContent = ""; });
-      return;
+  function bandOf(age) {
+    return BANDS.findIndex(b => age < b.maxMonths);  // the last band's limit is Infinity
+  }
+
+  // Metres of segment a→b inside the box, clipping it to the box edges (Liang–Barsky)
+  function clippedLength(ax, ay, bx, by, box) {
+    let t0 = 0, t1 = 1;
+    const dx = bx - ax, dy = by - ay;
+    for (const [p, q] of [[-dx, ax - box.w], [dx, box.e - ax], [-dy, ay - box.s], [dy, box.n - ay]]) {
+      if (p === 0) { if (q < 0) return 0; continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) return 0; if (t > t0) t0 = t; }
+      else { if (t < t0) return 0; if (t < t1) t1 = t; }
     }
+    const k = Math.cos(((ay + by) / 2) * Math.PI / 180);
+    return (t1 - t0) * Math.hypot(dx * k, dy) * Math.PI / 180 * EARTH_RADIUS_M;
+  }
+
+  function roadTotals() {
+    const b = map.getBounds();
+    const box = { w: b.getWest(), e: b.getEast(), s: b.getSouth(), n: b.getNorth() };
+    const filter = typeFilter();
+    const features = map.querySourceFeatures("roads", filter === true
+      ? { sourceLayer: "roads" } : { sourceLayer: "roads", filter });
+    const metres = { none: 0, b: BANDS.map(() => 0) };
+    for (const f of features) {
+      const g = f.geometry;
+      const lines = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : [];
+      let m = 0;
+      for (const line of lines) {
+        for (let i = 1; i < line.length; i++) {
+          m += clippedLength(line[i - 1][0], line[i - 1][1], line[i][0], line[i][1], box);
+        }
+      }
+      if (!m) continue;
+      if (f.properties.cov === "google") metres.b[bandOf(nowMonthIndex - f.properties.m)] += m;
+      else metres.none += m;
+    }
+    const b_km = metres.b.map(m => m / 1000), none = metres.none / 1000;
+    return { k: b_km.reduce((a, x) => a + x, none), none, b: b_km };
+  }
+
+  function hexTotals() {
     const bounds = map.getBounds();
     let cells = statsCells.filter(c => bounds.contains([c.x, c.y]));
     let where = "In view";
     if (!cells.length) {
-      // Zoomed in closer than one hexagon: use the one nearest the centre
+      // Closer than one hexagon: use the one nearest the centre
       const { lng, lat } = map.getCenter();
       const dist = c => (c.x - lng) ** 2 + (c.y - lat) ** 2;
       cells = [statsCells.reduce((a, b) => (dist(a) <= dist(b) ? a : b))];
       where = "Around here";
     }
-    const totals = { k: 0, n: 0, o: 0, b: BANDS.map(() => 0) };
+    const totals = { k: 0, none: 0, b: BANDS.map(() => 0) };
     for (const c of cells) {
-      totals.k += c.k; totals.n += c.n; totals.o += c.o;
+      totals.k += c.k; totals.none += c.n + c.o;
       totals.b.forEach((_, i) => { totals.b[i] += c[`b${i}`]; });
     }
-    target.innerHTML = `${where}: <strong>${fmt.format(totals.k)} km</strong> of road and path` +
-      (state.type === "all" ? "" : '<br><span class="small">Shares cover all ways, not just the filter.</span>');
-    const share = key => (key === "none" ? totals.n + totals.o : totals.b[Number(key)]) / (totals.k || 1);
+    return { totals, where };
+  }
+
+  function updateInView() {
+    const target = document.getElementById("in-view");
+    let totals = null, where = "In view", what = "of road and path", note = "";
+    if (map.getZoom() >= ROAD_STATS_ZOOM && map.getSource("roads")) {
+      totals = roadTotals();
+      what = { all: "of road and path", roads: "of road", major: "of major road" }[state.type];
+    } else if (statsCells.length) {
+      ({ totals, where } = hexTotals());
+      if (state.type !== "all") note = "Shares cover all ways, not just the filter.";
+    }
+    if (!totals) {
+      target.textContent = "";
+      legend.querySelectorAll("button").forEach(btn => {
+        btn.querySelector(".pct").textContent = "";
+        btn.querySelector(".bar span").style.width = "0";
+        btn.classList.remove("absent");
+      });
+      return;
+    }
+    target.innerHTML = totals.k
+      ? `${where}: <strong>${fmt.format(totals.k)} km</strong> ${what}` +
+        (note ? `<br><span class="small">${note}</span>` : "")
+      : `No ${what.slice(3)} in view`;
     legend.querySelectorAll("button").forEach(btn => {
-      const pct = share(btn.dataset.key) * 100;
+      const km = btn.dataset.key === "none" ? totals.none : totals.b[Number(btn.dataset.key)];
+      const pct = totals.k ? 100 * km / totals.k : 0;
       btn.querySelector(".pct").textContent = pct >= 0.5 || pct === 0 ? `${Math.round(pct)}%` : "<1%";
       btn.querySelector(".bar span").style.width = `${pct}%`;
+      btn.classList.toggle("absent", km === 0);
+      btn.title = km === 0 ? "None in view" : "";
     });
   }
-  map.on("moveend", updateInView);
+
+  // Recount when the view settles, and again whenever more road tiles have
+  // arrived, but not on every repaint
+  let roadTilesLoaded = 0, lastCount = "";
+  map.on("sourcedata", e => { if (e.sourceId === "roads" && e.tile) roadTilesLoaded++; });
+  function maybeUpdateInView() {
+    const key = [map.getBounds().toArray().flat().map(v => v.toFixed(5)), state.type,
+                 roadTilesLoaded, statsCells.length].join();
+    if (key === lastCount) return;
+    lastCount = key;
+    updateInView();
+  }
+  map.on("moveend", maybeUpdateInView);
+  map.on("idle", maybeUpdateInView);
 
   // --- Controls --------------------------------------------------------------
   legend.addEventListener("click", e => {
