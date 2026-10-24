@@ -3,6 +3,7 @@
 import asyncio
 import json
 import gzip
+import io
 import os
 from datetime import datetime, timezone
 
@@ -277,17 +278,25 @@ class FakeR2:
         self.calls.append(("delete", Key))
         del self.objects[Key]
 
-    def download_file(self, bucket, key, path):
+    def _missing(self, key):
         if key not in self.objects:
             exc = Exception("Not Found")
-            exc.response = {"Error": {"Code": "404"}}
+            exc.response = {"Error": {"Code": "NoSuchKey"}}
             raise exc
+
+    def download_file(self, bucket, key, path):
+        self._missing(key)
         with open(path, "wb") as f:
             f.write(self.objects[key]["Body"])
 
+    def get_object(self, Bucket, Key):
+        self._missing(Key)
+        return {"Body": io.BytesIO(self.objects[Key]["Body"])}
+
 
 PAGE = ('<script>\n  const DEFAULT_TILES = "leeds.pmtiles";\n'
-        '  const DEFAULT_OVERVIEW = "leeds.overview.json";\n</script>\n')
+        '  const DEFAULT_OVERVIEW = "leeds.overview.json";\n'
+        '  const DEFAULT_HISTORY = "";\n</script>\n')
 
 
 def _site(tmp_path, area="leeds"):
@@ -593,8 +602,10 @@ class TestPublishOverview:
         client = FakeR2()
         publish.publish_site(client, "site", self.PREFIX, "leeds", site, now=self.NOW)
         stem = f"{self.PREFIX}/tiles/leeds-20261022-104530"
+        archive = f"{self.PREFIX}/history/leeds-20261022-104530.overview.json"
+        # An overview without totals is archived but not listed in the history
         assert client.calls == [("upload", f"{stem}.pmtiles"), ("upload", f"{stem}.overview.json"),
-                                ("put", f"{self.PREFIX}/index.html")]
+                                ("upload", archive), ("put", f"{self.PREFIX}/index.html")]
         assert client.objects[f"{stem}.overview.json"]["ContentType"] == "application/json"
         body = client.objects[f"{self.PREFIX}/index.html"]["Body"]
         assert b'DEFAULT_OVERVIEW = "tiles/leeds-20261022-104530.overview.json"' in body
@@ -612,6 +623,74 @@ class TestPublishOverview:
         publish.publish_site(client, "site", p, "leeds", _site(tmp_path), now=self.NOW)
         assert not any(k in client.objects for k in old)
         assert all(k in client.objects for k in mid)
+
+
+class TestHistory:
+    PREFIX = "k7f3q9x2v8m1w4z6"
+    OCT = datetime(2026, 10, 24, 13, 3, 0, tzinfo=timezone.utc)
+    NOV = datetime(2026, 11, 2, 7, 15, 0, tzinfo=timezone.utc)
+
+    def _built_site(self, tmp_path, built, updated=True):
+        stats = overview.hex_stats([(53.8, -1.55, 4000.0, "2026-09"), (53.8, -1.55, 1000.0, NO_COVERAGE),
+                                    (51.5, -0.12, 5000.0, "2016-03")])
+        if updated:
+            stats = overview.merge_stats([stats, overview.hex_stats([(53.8, -1.55, 4000.0, overview.UPDATED)])])
+        tmp_path.mkdir(exist_ok=True)
+        site = _site(tmp_path)
+        overview.save_json(overview.build_overview(stats, built), str(tmp_path / "leeds.overview.json"))
+        return site
+
+    def _history(self, client):
+        return json.loads(client.objects[f"{self.PREFIX}/history/leeds.json"]["Body"])
+
+    def test_overview_carries_totals_and_top_areas(self):
+        stats = overview.merge_stats([
+            overview.hex_stats([(53.8, -1.55, 4000.0, "2026-09"), (51.5, -0.12, 5000.0, "2016-03")]),
+            overview.hex_stats([(53.8, -1.55, 3000.0, overview.UPDATED),
+                                (51.5, -0.12, 500.0, overview.UPDATED)])])
+        fc = overview.build_overview(stats, "2026-10")
+        assert fc["totals"]["k"] == 9.0 and fc["totals"]["u"] == 3.5
+        assert fc["totals"]["b0"] == 4.0 and fc["totals"]["b5"] == 5.0
+        leeds, london = fc["top"]
+        assert leeds["km"] == 3.0 and london["km"] == 0.5   # most new imagery first
+        assert leeds["y"] == pytest.approx(53.8, abs=0.3) and leeds["x"] == pytest.approx(-1.55, abs=0.3)
+
+    def test_no_comparison_means_no_new_total(self):
+        fc = overview.build_overview(overview.hex_stats([(53.8, -1.55, 100.0, "2024-01")]), "2026-10")
+        assert "u" not in fc["totals"] and fc["top"] == []
+
+    def test_publish_archives_overview_and_appends_to_history(self, tmp_path):
+        client = FakeR2()
+        oct_site = self._built_site(tmp_path / "oct", "2026-10", updated=False)
+        publish.publish_site(client, "site", self.PREFIX, "leeds", oct_site, now=self.OCT)
+        publish.publish_site(client, "site", self.PREFIX, "leeds",
+                             self._built_site(tmp_path / "nov", "2026-11"), now=self.NOV)
+        first, second = self._history(client)["builds"]
+        assert first["stamp"] == "20261024-130300" and first["built"] == "2026-10" and "u" not in first
+        assert second["overview"] == "history/leeds-20261102-071500.overview.json"
+        assert second["k"] == 10.0 and second["u"] == 4.0 and second["top"][0]["km"] == 4.0
+        # Archived overviews are never pruned, unlike the copies beside the tiles
+        for stamp in ("20261024-130300", "20261102-071500"):
+            assert f"{self.PREFIX}/history/leeds-{stamp}.overview.json" in client.objects
+        history = client.objects[f"{self.PREFIX}/history/leeds.json"]
+        assert history["CacheControl"] == "no-cache" and history["ContentType"] == "application/json"
+        page = client.objects[f"{self.PREFIX}/index.html"]["Body"]
+        assert b'DEFAULT_HISTORY = "history/leeds.json"' in page
+
+    def test_republishing_a_stamp_replaces_its_entry(self, tmp_path):
+        client = FakeR2()
+        for _ in range(2):
+            publish.publish_site(client, "site", self.PREFIX, "leeds",
+                                 self._built_site(tmp_path, "2026-11"), now=self.NOV)
+        assert len(self._history(client)["builds"]) == 1
+
+    def test_publish_page_points_at_history(self, tmp_path):
+        p = self.PREFIX
+        client = FakeR2({f"{p}/tiles/uk-20261024-130300.pmtiles": {"Body": b"x"}})
+        index = tmp_path / "index.html"
+        index.write_text(PAGE)
+        page, _, _ = publish.publish_page(client, "site", p, "uk", str(index))
+        assert b'DEFAULT_HISTORY = "history/uk.json"' in client.objects[page]["Body"]
 
 
 class TestFullRebuild:

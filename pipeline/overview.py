@@ -1,4 +1,5 @@
-"""Hexagon overview for low zooms, and the numbers behind the page's "in view" panel.
+"""Hexagon overview for low zooms, and the numbers behind the page's "in view" panel
+and update digest.
 
 Each shard tallies road length per H3 hexagon (resolution 6, about 36 km²) and per
 value: a capture month, "none" or "other". Tallies add up across shards, so a
@@ -26,6 +27,10 @@ from pipeline.streetview import NO_COVERAGE, NON_GOOGLE
 BAND_EDGES_MONTHS = (6, 12, 36, 60, 120)
 STATS_RES = 6
 COARSE_RES = 5
+# The update digest names the areas with the most new imagery: resolution-4
+# hexagons, about 1,800 km² (roughly county-sized)
+TOP_AREAS_RES = 4
+TOP_AREAS = 5
 
 # Pseudo-value in the tallies for length with new imagery this build (counted on
 # top of its real value, so it isn't part of the bands or the total)
@@ -127,14 +132,38 @@ def _feature(cell: str, res: int, props: Dict) -> Dict:
             "properties": {"r": res, **props}}
 
 
+def top_updated(stats: HexStats, res: int = TOP_AREAS_RES, n: int = TOP_AREAS) -> List[Dict]:
+    """The `n` areas with the most new imagery: centre (x, y) and kilometres, most first."""
+    by_area: Dict[str, float] = defaultdict(float)
+    for cell, values in stats.items():
+        if values.get(UPDATED):
+            by_area[h3.cell_to_parent(cell, res)] += values[UPDATED]
+    top = []
+    for cell, metres in sorted(by_area.items(), key=lambda kv: -kv[1])[:n]:
+        lat, lng = h3.cell_to_latlng(cell)
+        top.append({"x": round(lng, 3), "y": round(lat, 3), "km": round(metres / 1000, 1)})
+    return top
+
+
 def build_overview(stats: HexStats, built: str) -> Dict:
-    """GeoJSON FeatureCollection of both resolutions, with the build month ("YYYY-MM")."""
+    """GeoJSON FeatureCollection of both resolutions, with the build month ("YYYY-MM").
+
+    Also carries the whole area's totals and the areas with the most new
+    imagery, for the page's update digest and history. "u" is left out of the
+    totals when the build had nothing to compare with.
+    """
     built_index = month_index(built)
     features = [_feature(cell, STATS_RES, summarise(values, built_index))
                 for cell, values in sorted(stats.items())]
     features += [_feature(cell, COARSE_RES, summarise(values, built_index))
                  for cell, values in sorted(coarsen(stats, COARSE_RES).items())]
-    return {"type": "FeatureCollection", "built": built, "features": features}
+    # Every hexagon's tallies added together
+    everything = merge_stats({"all": values} for values in stats.values()).get("all", {})
+    totals = summarise(everything, built_index)
+    if not any(UPDATED in values for values in stats.values()):
+        del totals["u"]
+    return {"type": "FeatureCollection", "built": built, "totals": totals,
+            "top": top_updated(stats), "features": features}
 
 
 def save_json(data, path: str) -> None:
