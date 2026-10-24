@@ -498,12 +498,14 @@
   let dataLoaded = false;
   function addDataLayers() {
     if (!dataLoaded || map.getSource("roads")) return;
-    // Above every road, building and boundary in the base map, below the labels
-    // that follow them. Not simply the first label: the dark style has water
-    // names low down, under its buildings.
+    // Above the base map's roads and buildings, below the first label after
+    // them. Not simply the first label: the dark style has water names low
+    // down, under its buildings. Not after its last shape either: the dark
+    // style draws boundaries after its street names, which our roads would hide.
     const base = map.getStyle().layers;
-    const lastShape = base.findLastIndex(l => l.type !== "symbol");
-    const firstLabel = base.slice(lastShape + 1).find(l => l.type === "symbol")?.id;
+    const lastRoad = base.findLastIndex(l => l.type !== "symbol" &&
+      ["transportation", "building"].includes(l["source-layer"]));
+    const firstLabel = base.slice(lastRoad + 1).find(l => l.type === "symbol")?.id;
 
     // With an overview, roads start at the handoff zoom, so no road tiles are
     // fetched for the zoomed-out view at all
@@ -734,7 +736,19 @@
   // Changing theme swaps the base map style, which drops our sources and layers;
   // they go back on once the new style has loaded.
   let styleReady = true;  // false while a new base map style loads
-  map.on("style.load", () => { styleReady = true; addDataLayers(); });
+  map.on("style.load", () => { styleReady = true; keepPlaceNames(); addDataLayers(); });
+
+  // The dark base map hides town, village and city names past zoom 12–15,
+  // leaving street level with no place names. Keep them on, as the light one
+  // does (state and country names still stop, as in both styles).
+  function keepPlaceNames() {
+    for (const layer of map.getStyle().layers) {
+      if (layer["source-layer"] === "place" && layer.maxzoom !== undefined &&
+          !/state|country/.test(layer.id)) {
+        map.setLayerZoomRange(layer.id, layer.minzoom ?? 0, 24);
+      }
+    }
+  }
   function applyTheme() {
     const theme = effectiveTheme();
     document.documentElement.dataset.theme = theme;
