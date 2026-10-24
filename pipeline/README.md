@@ -189,6 +189,21 @@ running the workflow again resumes where it stopped. The first full run takes 10
 
 Scheduled runs never tick the box, so they always refresh once a shard has a result.
 
+### Page-only changes
+
+Changes to `pipeline/web/` (the panel, colours, layout) don't need new data. When one reaches `main`, the
+**Deploy page** workflow (`.github/workflows/deploy-page.yml`) runs `publish-page --area uk`: it points the page at the
+newest tiles and overview already in R2 and uploads only `index.html`, in about a minute. It can also be started by
+hand from the Actions tab.
+
+```bash
+.venv/bin/python -m pipeline.run publish-page --area uk
+```
+
+Build map's publish step also takes the page from the latest `main` rather than the commit it started from, so a long
+build never puts back an older page. A page change that needs data the tiles don't have yet (a new road property)
+only works after the next Build map run.
+
 ### Full rebuild
 
 **Actions → Build map → Run workflow**, tick **Full rebuild**. The run shows as "Build map (full rebuild)" and takes

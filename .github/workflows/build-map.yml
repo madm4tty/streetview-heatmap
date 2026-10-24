@@ -185,7 +185,10 @@ jobs:
           ~/.local/bin/tile-join -o pipeline/data/site/uk.pmtiles --force --no-tile-size-limit \
             pipeline/data/site/uk-*.pmtiles
           python3 -m pipeline.run overview --area uk
-          cp pipeline/web/index.html pipeline/data/site/
+          # The page from the latest main, not this run's commit, so a long build
+          # that started before a page change doesn't put the old page back
+          git fetch --depth 1 origin main
+          git show FETCH_HEAD:pipeline/web/index.html > pipeline/data/site/index.html
           ls -lh pipeline/data pipeline/data/site
 
       - run: python3 -m pipeline.run publish --area uk
