@@ -68,8 +68,9 @@ python3 -m pipeline.run overview --area uk              # merge shard hexagon ta
 - Cloud sessions can't download from Geofabrik (the proxy drops the connection), so real builds run on GitHub
   Actions. The site's Cloudflare zone blocks non-browser user agents (error 1010): send a browser User-Agent when
   checking it from scripts.
-- Open decisions: make the colour-blind safe palette (Okabe–Ito) the default (the classic green-to-red fails the
-  palette checks); what to do about path imagery (Google Trekker imagery is also "© Google", so parks can show dated
+- Decided: the classic green-to-red palette stays the default, with the Okabe–Ito colour-blind safe palette as an
+  opt-in toggle (owner's choice, 2026-10-24, although the classic palette fails the palette checks).
+- Open decision: what to do about path imagery (Google Trekker imagery is also "© Google", so parks can show dated
   imagery even though the aim is car imagery only).
 - Not built yet: a council league table (ONS boundaries). The "new imagery" highlight compares each build with the
   result saved by the one before it, so it shows what changed between consecutive builds (monthly once on schedule).
