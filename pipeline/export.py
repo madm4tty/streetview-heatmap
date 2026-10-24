@@ -68,8 +68,38 @@ def piece_panos(pieces: List[Piece], segments: List[Segment],
     return panos
 
 
+def updates_since(pieces: List[Piece], previous: List[Piece]) -> List[Optional[int]]:
+    """For each piece, whether this build found newer imagery than the previous one.
+
+    Returns the previous month index for a piece whose date got newer, 0 for a
+    piece that has Google imagery now but had none before, and None otherwise
+    (unchanged, older, imagery gone, or a road the previous build didn't have).
+    Compared at the middle of each piece, so pieces split differently between
+    builds still line up.
+    """
+    by_segment: Dict[str, List[Piece]] = defaultdict(list)
+    for p in previous:
+        by_segment[p.segment_id].append(p)
+    out: List[Optional[int]] = []
+    for p in pieces:
+        if p.value in (NO_COVERAGE, NON_GOOGLE):
+            out.append(None)
+            continue
+        mid = (p.start_m + p.end_m) / 2
+        before = next((q.value for q in by_segment.get(p.segment_id, ())
+                       if q.start_m <= mid <= q.end_m), None)
+        if before is None or before == p.value:
+            out.append(None)
+        elif before in (NO_COVERAGE, NON_GOOGLE):
+            out.append(0)
+        else:
+            out.append(month_index(before) if month_index(p.value) > month_index(before) else None)
+    return out
+
+
 def write_geojsonseq(pieces: List[Piece], segments: List[Segment], path: str,
-                     panos: Optional[Sequence[Optional[str]]] = None) -> int:
+                     panos: Optional[Sequence[Optional[str]]] = None,
+                     updates: Optional[Sequence[Optional[int]]] = None) -> int:
     """Write one GeoJSON Feature per line (the format tippecanoe reads fastest)."""
     by_id = {s.id: s for s in segments}
     count = 0
@@ -80,6 +110,9 @@ def write_geojsonseq(pieces: List[Piece], segments: List[Segment], path: str,
             props = piece_properties(seg, p.value)
             if panos and panos[i]:
                 props["pano"] = panos[i]
+            # "u": new imagery this build; the value is the previous month index, or 0 if none before
+            if updates and updates[i] is not None:
+                props["u"] = updates[i]
             feature = {
                 "type": "Feature",
                 "geometry": {

@@ -144,7 +144,8 @@
           <option value="major">major roads only</option>
         </select>
       </label>
-      <label><input type="checkbox" id="cvd"> Colour-blind friendly colours</label>
+      <label><input type="checkbox" id="cvd"> Colour-blind safe colours</label>
+      <label id="new-control" hidden><input type="checkbox" id="new"> Highlight new imagery since the last update</label>
     </div>
     <p class="muted small" id="as-of"></p>
   </div>
@@ -161,9 +162,10 @@
   ];
   const PALETTES = {
     classic: ["#22c55e", "#84cc16", "#eab308", "#f97316", "#ef4444", "#b91c1c"],
-    // One hue, light (recent) to dark (old); passes the ordinal palette checks
-    // against the base map, including for colour-blind viewers
-    cvd: ["#72a8e6", "#4f8fda", "#2f74c9", "#1d5aa8", "#143f7d", "#0b2650"],
+    // Okabe–Ito colours, recent to old: blue, sky blue, bluish green, orange,
+    // vermilion, wine. Distinct hues chosen to stay apart for colour-blind
+    // viewers; passes the categorical palette checks on every pair
+    cvd: ["#0072B2", "#56B4E9", "#009E73", "#E69F00", "#D55E00", "#882255"],
   };
   const NO_IMAGERY_COLOR = "#9ca3af";
   // Match PATH_HIGHWAYS in pipeline/roads.py; "roads only" also leaves out service roads
@@ -214,6 +216,7 @@
     hidden: new Set((initial.get("hide") || "").split(",").filter(Boolean)),  // "0".."5", "none"
     type: ["roads", "major"].includes(initial.get("type")) ? initial.get("type") : "all",
     palette: initial.get("palette") === "cvd" ? "cvd" : "classic",
+    fresh: initial.get("new") === "1",  // highlight new imagery
   };
 
   // Ages are worked out against today's date in the browser, so the
@@ -232,6 +235,13 @@
     12, ["case", isMajor, 2.5, 1.2],
     15, ["case", isMajor, 5, 3],
     18, ["case", isMajor, 10, 6]];
+  // Road width plus a few pixels, for the casing round new imagery
+  const haloWidth = ["interpolate", ["linear"], ["zoom"],
+    6, ["case", isMajor, 2.6, 2.2],
+    8, ["case", isMajor, 3.6, 2.9],
+    12, ["case", isMajor, 6, 4.7],
+    15, ["case", isMajor, 9, 7],
+    18, ["case", isMajor, 15, 11]];
 
   function typeFilter() {
     if (state.type === "major") return isMajor;
@@ -296,8 +306,25 @@
     }
   }
 
+  // With "highlight new imagery" on, roads without new imagery fade to this
+  const FADED = 0.2;
+  const isNew = ["has", "u"];
+  // Opacity for road layers: fading in over the handoff zooms when there's an
+  // overview, and faded unless new while highlighting
+  function roadOpacity() {
+    const full = state.fresh ? ["case", isNew, 1, FADED] : 1;
+    return overview ? ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, 0, HANDOFF_ZOOM + 1.5, full] : full;
+  }
+  function hexOpacity(fine) {
+    const full = state.fresh ? ["case", [">", ["coalesce", ["get", "u"], 0], 0], 0.7, 0.12] : 0.7;
+    return fine ? ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, full, HANDOFF_ZOOM + 1.5, 0] : full;
+  }
+
   function applyStyle() {
     const palette = PALETTES[state.palette];
+    for (const id of ["imagery", "no-imagery"]) map.setPaintProperty(id, "line-opacity", roadOpacity());
+    map.setFilter("new-imagery", ["all", isNew, typeFilter()]);
+    map.setLayoutProperty("new-imagery", "visibility", state.fresh ? "visible" : "none");
     const shown = ["literal", visibleBands()];
     // Filter before colour, so the colour rule never sees roads without a date
     map.setFilter("imagery", ["all", ["==", ["get", "cov"], "google"], ["in", bandIndex, shown], typeFilter()]);
@@ -311,6 +338,7 @@
       for (const id of ["hex-coarse", "hex-fine"]) {
         map.setFilter(id, ["all", ["==", ["get", "r"], id === "hex-coarse" ? 5 : 6], hexShown]);
         map.setPaintProperty(id, "fill-color", hexColor);
+        map.setPaintProperty(id, "fill-opacity", hexOpacity(id === "hex-fine"));
       }
     }
     paintLegend();
@@ -323,8 +351,6 @@
     // With an overview, roads start at the handoff zoom, so no road tiles are
     // fetched for the zoomed-out view at all
     const roadMinZoom = overview ? HANDOFF_ZOOM : 0;
-    const roadOpacity = overview
-      ? ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, 0, HANDOFF_ZOOM + 1.5, 1] : 1;
 
     map.addSource("roads", {
       type: "vector",
@@ -333,11 +359,12 @@
     });
     if (overview) {
       map.addSource("hex", { type: "geojson", data: overview });
-      const hexOpacity = ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, 0.7, HANDOFF_ZOOM + 1.5, 0];
       map.addLayer({ id: "hex-coarse", type: "fill", source: "hex", maxzoom: 6.5,
-                     paint: { "fill-opacity": 0.7, "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
+                     paint: { "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
       map.addLayer({ id: "hex-fine", type: "fill", source: "hex", minzoom: 6.5, maxzoom: HANDOFF_ZOOM + 1.5,
-                     paint: { "fill-opacity": hexOpacity, "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
+                     paint: { "fill-outline-color": "rgba(255,255,255,0.6)" } }, firstLabel);
+      // Only data built with change tracking can be highlighted
+      document.getElementById("new-control").hidden = !overview.features.some(f => "u" in f.properties);
       // Centre of each hexagon: the mean of its six corners
       statsCells = overview.features.filter(f => f.properties.r === 6).map(f => {
         const ring = f.geometry.coordinates[0].slice(0, -1);
@@ -353,14 +380,21 @@
     }
     map.addLayer({
       id: "no-imagery", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
-      paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [2, 1.5],
-               "line-opacity": roadOpacity },
+      paint: { "line-color": NO_IMAGERY_COLOR, "line-width": widthExpr, "line-dasharray": [2, 1.5] },
       layout: { "line-cap": "butt" },
+    }, firstLabel);
+    // A dark casing under roads with new imagery, shown while highlighting
+    map.addLayer({
+      id: "new-imagery", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
+      filter: isNew,
+      paint: { "line-color": "#111827", "line-width": haloWidth,
+               "line-opacity": overview ? ["interpolate", ["linear"], ["zoom"], HANDOFF_ZOOM, 0, HANDOFF_ZOOM + 1.5, 0.9] : 0.9 },
+      layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
     }, firstLabel);
     map.addLayer({
       id: "imagery", type: "line", source: "roads", "source-layer": "roads", minzoom: roadMinZoom,
       filter: ["==", ["get", "cov"], "google"],
-      paint: { "line-width": widthExpr, "line-opacity": roadOpacity },
+      paint: { "line-width": widthExpr },
       layout: { "line-cap": "round", "line-join": "round" },
     }, firstLabel);
 
@@ -405,7 +439,7 @@
     const filter = typeFilter();
     const features = map.querySourceFeatures("roads", filter === true
       ? { sourceLayer: "roads" } : { sourceLayer: "roads", filter });
-    const metres = { none: 0, b: BANDS.map(() => 0) };
+    const metres = { none: 0, b: BANDS.map(() => 0), u: 0 };
     for (const f of features) {
       const g = f.geometry;
       const lines = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : [];
@@ -418,9 +452,10 @@
       if (!m) continue;
       if (f.properties.cov === "google") metres.b[bandOf(nowMonthIndex - f.properties.m)] += m;
       else metres.none += m;
+      if (f.properties.u !== undefined) metres.u += m;
     }
     const b_km = metres.b.map(m => m / 1000), none = metres.none / 1000;
-    return { k: b_km.reduce((a, x) => a + x, none), none, b: b_km };
+    return { k: b_km.reduce((a, x) => a + x, none), none, b: b_km, u: metres.u / 1000 };
   }
 
   function hexTotals() {
@@ -434,9 +469,9 @@
       cells = [statsCells.reduce((a, b) => (dist(a) <= dist(b) ? a : b))];
       where = "Around here";
     }
-    const totals = { k: 0, none: 0, b: BANDS.map(() => 0) };
+    const totals = { k: 0, none: 0, b: BANDS.map(() => 0), u: 0 };
     for (const c of cells) {
-      totals.k += c.k; totals.none += c.n + c.o;
+      totals.k += c.k; totals.none += c.n + c.o; totals.u += c.u || 0;
       totals.b.forEach((_, i) => { totals.b[i] += c[`b${i}`]; });
     }
     return { totals, where };
@@ -461,10 +496,12 @@
       });
       return;
     }
-    target.innerHTML = totals.k
+    const newKm = totals.u >= 0.1 ? `<strong>${totals.u < 10 ? totals.u.toFixed(1) : fmt.format(totals.u)} km</strong>` : "none";
+    target.innerHTML = (totals.k
       ? `${where}: <strong>${fmt.format(totals.k)} km</strong> ${what}` +
         (note ? `<br><span class="small">${note}</span>` : "")
-      : `No ${what.slice(3)} in view`;
+      : `No ${what.slice(3)} in view`) +
+      (state.fresh ? `<br>New imagery since the last update: ${newKm}` : "");
     legend.querySelectorAll("button").forEach(btn => {
       const km = btn.dataset.key === "none" ? totals.none : totals.b[Number(btn.dataset.key)];
       const pct = totals.k ? 100 * km / totals.k : 0;
@@ -505,6 +542,15 @@
   roadType.addEventListener("change", () => {
     state.type = roadType.value;
     writeHash({ type: state.type === "all" ? null : state.type });
+    applyStyle();
+    updateInView();
+  });
+
+  const fresh = document.getElementById("new");
+  fresh.checked = state.fresh;
+  fresh.addEventListener("change", () => {
+    state.fresh = fresh.checked;
+    writeHash({ new: fresh.checked ? "1" : null });
     applyStyle();
     updateInView();
   });
@@ -616,6 +662,7 @@
         ? "No Google imagery" : `Median capture ${monthName(Number(p.m))} (${describeAge(nowMonthIndex - Number(p.m))})`;
       html = `<h2>This area</h2><div>${median}</div>
         <div>${fmt.format(p.k)} km of road and path, ${covered}% with Google imagery</div>
+        ${Number(p.u) > 0 ? `<div>${Number(p.u).toFixed(1)} km with new imagery since the last update</div>` : ""}
         <div class="muted">Zoom in to see individual roads.</div>`;
     } else {
       const title = escapeHtml(p.name || p.hw.replace(/_/g, " "));
@@ -624,6 +671,10 @@
         const [y, mo] = p.ym.split("-").map(Number);
         const when = new Date(y, mo - 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
         body = `Captured ${when} (${describeAge(nowMonthIndex - p.m)})`;
+        if (p.u !== undefined) {
+          body += `<br><strong>New since the last update:</strong> ` +
+            (Number(p.u) > 0 ? `previously ${monthName(Number(p.u))}` : "no Street View before");
+        }
       } else {
         body = p.cov === "other" ? "Only user-contributed photos here" : "No Street View imagery found";
       }

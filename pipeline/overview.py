@@ -27,6 +27,10 @@ BAND_EDGES_MONTHS = (6, 12, 36, 60, 120)
 STATS_RES = 6
 COARSE_RES = 5
 
+# Pseudo-value in the tallies for length with new imagery this build (counted on
+# top of its real value, so it isn't part of the bands or the total)
+UPDATED = "+new"
+
 # hexagon -> value -> metres of road
 HexStats = Dict[str, Dict[str, float]]
 
@@ -39,6 +43,15 @@ def piece_points(pieces: Iterable[Piece], segments: Iterable[Segment]
         seg = by_id[p.segment_id]
         lat, lon = point_at(seg.coords, seg.cum, (p.start_m + p.end_m) / 2)
         yield lat, lon, p.end_m - p.start_m, p.value
+
+
+def with_updates(points: Iterable[Tuple[float, float, float, str]],
+                 updates: Iterable[Optional[int]]) -> Iterator[Tuple[float, float, float, str]]:
+    """The points, plus an UPDATED copy of each one whose piece has new imagery."""
+    for point, update in zip(points, updates):
+        yield point
+        if update is not None:
+            yield (*point[:3], UPDATED)
 
 
 def hex_stats(points: Iterable[Tuple[float, float, float, str]], res: int = STATS_RES) -> HexStats:
@@ -72,8 +85,11 @@ def summarise(values: Dict[str, float], built_index: int) -> Dict:
     bands = [0.0] * (len(BAND_EDGES_MONTHS) + 1)
     none = other = 0.0
     dated: List[Tuple[int, float]] = []
+    updated = 0.0
     for value, length in values.items():
-        if value == NO_COVERAGE:
+        if value == UPDATED:
+            updated += length
+        elif value == NO_COVERAGE:
             none += length
         elif value == NON_GOOGLE:
             other += length
@@ -85,7 +101,8 @@ def summarise(values: Dict[str, float], built_index: int) -> Dict:
     # for the whole UK stays small
     props = {f"b{i}": round(b / 1000, 1) for i, b in enumerate(bands)}
     props.update(n=round(none / 1000, 1), o=round(other / 1000, 1),
-                 k=round((sum(bands) + none + other) / 1000, 1), m=weighted_median(dated))
+                 k=round((sum(bands) + none + other) / 1000, 1), m=weighted_median(dated),
+                 u=round(updated / 1000, 1))
     return props
 
 

@@ -68,11 +68,11 @@ python3 -m pipeline.run overview --area uk              # merge shard hexagon ta
 - Cloud sessions can't download from Geofabrik (the proxy drops the connection), so real builds run on GitHub
   Actions. The site's Cloudflare zone blocks non-browser user agents (error 1010): send a browser User-Agent when
   checking it from scripts.
-- Open decisions: make the colour-blind palette the default (the classic green-to-red fails the ordinal palette
-  checks); what to do about path imagery (Google Trekker imagery is also "© Google", so parks can show dated
+- Open decisions: make the colour-blind safe palette (Okabe–Ito) the default (the classic green-to-red fails the
+  palette checks); what to do about path imagery (Google Trekker imagery is also "© Google", so parks can show dated
   imagery even though the aim is car imagery only).
-- Not built yet: an "updated this month" highlight (store each road's previous date) and a council league table
-  (ONS boundaries).
+- Not built yet: a council league table (ONS boundaries). The "new imagery" highlight compares each build with the
+  result saved by the one before it, so it shows what changed between consecutive builds (monthly once on schedule).
 - Owner to-dos outside the repo: Google project budget alert, Cloudflare two-factor login, optionally disable the
   Maps Static API, delete the unused `GMAPS_APIKEY_REPO` secret, and shut down the old Flask app if it still runs
   anywhere.
