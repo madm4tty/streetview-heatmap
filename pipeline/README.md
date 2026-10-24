@@ -111,6 +111,12 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   paths with imagery under a year old at each update. Any past update can be shown as hexagons (roads are always
   the latest build's), with ages as of that update; `#build=<stamp>` links to it. Builds published before this
   have no history entry.
+- **Theme**: Device (the default, following the device's light or dark setting), Light or Dark, remembered on that
+  device (not put in shared links). Dark swaps the base map for OpenFreeMap's `dark` style, which drops the page's
+  own layers, so they are added again once it loads; they go above the base map's last road, building or boundary
+  layer rather than under its first label, since the dark style has water names low down. On the dark map the new-
+  imagery casing turns light, and the colour-blind palette's wine becomes `#A23B72` (the original is 2.2:1 against
+  the near-black map; this passes the separation checks and 3:1).
 - **Place search** with [Photon](https://photon.komoot.io) (free OpenStreetMap geocoder, limited to the UK), and a
   locate-me button.
 - **"Open in Street View"** opens the exact panorama the stretch is dated by: `tiles` looks up each piece's
