@@ -30,7 +30,7 @@ from typing import Dict, List, Optional
 from pipeline import areas, measure, overview, publish
 from pipeline.cache import Key, MetadataCache
 from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces, piece_panos,
-                             save_pieces, write_geojsonseq)
+                             save_pieces, updates_since, write_geojsonseq)
 from pipeline.refresh import refresh
 from pipeline.roads import iter_segments, load_segments
 from pipeline.sampler import sample_bisect, sample_dense
@@ -46,6 +46,11 @@ SITE_DIR = os.path.join(DATA_DIR, "site")
 
 def pbf_path(area: str) -> str:
     return os.path.join(DATA_DIR, f"{areas.extract_name(area)}-latest.osm.pbf")
+
+
+def prev_pieces_path(area: str, mode: str) -> str:
+    """The result before the latest sample or refresh, for marking new imagery."""
+    return os.path.join(DATA_DIR, f"{area}-{mode}.prev.pieces.jsonl")
 
 
 def cache_path(area: str) -> str:
@@ -161,6 +166,10 @@ def cmd_sample(args) -> None:
         cache.close()
     elapsed = time.time() - start
 
+    # Keep the last result, so tiles can mark what this run found new (refresh
+    # does the same); matters for a full rebuild over an existing result
+    if os.path.exists(pieces_path(args.area, args.mode)):
+        shutil.copy(pieces_path(args.area, args.mode), prev_pieces_path(args.area, args.mode))
     save_pieces(pieces, pieces_path(args.area, args.mode))
     km = sum(s.length for s in segments) / 1000
     lookups = client.api_calls + client.cache_hits
@@ -195,7 +204,7 @@ def cmd_refresh(args) -> None:
     finally:
         client.cache.close()
 
-    shutil.copy(path, path.replace(".pieces.jsonl", ".prev.pieces.jsonl"))
+    shutil.copy(path, prev_pieces_path(args.area, "bisect"))
     save_pieces(result.pieces, path)
     print(f"\n{args.area} refresh in {time.time() - start:,.0f}s")
     print(f"  sentinels checked: {result.sentinels:,} ({args.cell_m:.0f} m cells); "
@@ -250,10 +259,17 @@ def cmd_overview(args) -> None:
 def cmd_tiles(args) -> None:
     segments = load_area_segments(args.area)
     pieces = load_pieces(pieces_path(args.area, args.mode))
+    prev = prev_pieces_path(args.area, args.mode)
+    updates = updates_since(pieces, load_pieces(prev)) if os.path.exists(prev) else None
+    if updates is not None:
+        logger.info("New imagery on %d of %d pieces since the previous result",
+                    sum(1 for u in updates if u is not None), len(pieces))
     # Hexagon tallies: merged across shards later for the UK, or straight into
     # this area's overview otherwise
-    overview.save_json(overview.hex_stats(overview.piece_points(pieces, segments)),
-                       hexstats_path(args.area))
+    points = overview.piece_points(pieces, segments)
+    if updates is not None:
+        points = overview.with_updates(points, updates)
+    overview.save_json(overview.hex_stats(points), hexstats_path(args.area))
     if "cells" not in areas.get_area(args.area):
         write_overview(args.area, [hexstats_path(args.area)])
     os.makedirs(SITE_DIR, exist_ok=True)
@@ -266,7 +282,7 @@ def cmd_tiles(args) -> None:
         finally:
             cache.close()
         logger.info("Panorama IDs for %d of %d pieces", sum(1 for x in panos if x), len(pieces))
-    n = write_geojsonseq(pieces, segments, geojsonseq, panos)
+    n = write_geojsonseq(pieces, segments, geojsonseq, panos, updates)
     logger.info("Wrote %d features to %s", n, geojsonseq)
     pmtiles = os.path.join(SITE_DIR, f"{args.area}.pmtiles")
     build_pmtiles(geojsonseq, pmtiles)

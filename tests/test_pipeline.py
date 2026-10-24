@@ -11,7 +11,7 @@ import pytest
 from pipeline import areas, measure, overview, publish, run, shards
 from pipeline.cache import Lookup, MetadataCache, make_key
 from pipeline.export import (agreement_by_length, month_index, piece_panos, piece_properties,
-                             write_geojsonseq)
+                             updates_since, write_geojsonseq)
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
 from pipeline.refresh import refresh
 from pipeline.roads import Segment, include_way
@@ -698,3 +698,39 @@ class TestPanoramaLinks:
         lines = [json.loads(line) for line in out.read_text().splitlines()]
         assert lines[0]["properties"]["pano"] == "PANO1"
         assert "pano" not in lines[1]["properties"]
+
+
+class TestNewImagery:
+    def test_newer_date_and_new_coverage_are_marked(self):
+        prev = [Piece("r", 0, 500, "2019-03"), Piece("r", 500, 1000, NO_COVERAGE),
+                Piece("s", 0, 300, "2021-06")]
+        now = [Piece("r", 0, 400, "2026-04"),       # newer than 2019-03
+               Piece("r", 400, 600, "2019-03"),     # middle (500) on the old boundary: unchanged value
+               Piece("r", 600, 1000, "2026-04"),    # had none before
+               Piece("s", 0, 300, "2021-06"),       # unchanged
+               Piece("t", 0, 200, "2026-04")]       # new road: not new imagery
+        assert updates_since(now, prev) == [month_index("2019-03"), None, 0, None, None]
+
+    def test_older_or_lost_imagery_is_not_new(self):
+        prev = [Piece("r", 0, 500, "2024-01"), Piece("r", 500, 1000, "2024-01")]
+        now = [Piece("r", 0, 500, "2022-05"), Piece("r", 500, 1000, NO_COVERAGE)]
+        assert updates_since(now, prev) == [None, None]
+
+    def test_marked_in_tiles_and_tallied_per_hexagon(self, tmp_path):
+        seg = _road()
+        pieces = [Piece(seg.id, 0, 500, "2026-04"), Piece(seg.id, 500, seg.length, "2019-03")]
+        updates = [month_index("2019-03"), None]
+        out = tmp_path / "x.geojsonl"
+        write_geojsonseq(pieces, [seg], str(out), None, updates)
+        props = [json.loads(line)["properties"] for line in out.read_text().splitlines()]
+        assert props[0]["u"] == month_index("2019-03") and "u" not in props[1]
+
+        stats = overview.hex_stats(overview.with_updates(overview.piece_points(pieces, [seg]), updates))
+        combined = {}  # the road may cross a hexagon boundary: add its cells together
+        for cell in stats.values():
+            for value, metres in cell.items():
+                combined[value] = combined.get(value, 0) + metres
+        summary = overview.summarise(combined, month_index("2026-10"))
+        # The new stretch counts once in the total, and again only in "u"
+        assert summary["u"] == pytest.approx(0.5, abs=0.06)
+        assert summary["k"] == pytest.approx(seg.length / 1000, abs=0.06)

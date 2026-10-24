@@ -87,8 +87,16 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   after each move at zoom 11–12 in central London (on a slow test machine) and a few ms at street level; raise
   `ROAD_STATS_ZOOM` in the page if that ever feels sluggish.
 - **Filters**: all ways, roads only (no paths, tracks or service roads), or major roads.
-- **Colour-blind friendly colours**: a single-hue blue ramp that passes the ordinal palette checks against the base
-  map. The default green-to-red palette fails them (lime and green are too close even with normal colour vision).
+- **Colour-blind safe colours**: the Okabe–Ito set, recent to old: blue, sky blue, bluish green, orange, vermilion,
+  wine. Distinct hues chosen to stay apart for colour-blind viewers; passes the categorical palette checks on every
+  pair (sky blue and orange are faint on the light base map, which the text labels cover). It replaced a single-hue
+  blue ramp that passed the checks but was hard to read on thin lines. The default green-to-red palette fails them.
+- **Highlight new imagery since the last update**: `tiles` compares each piece with the previous result
+  (`<area>-bisect.prev.pieces.jsonl`, kept by `refresh`, and by `sample` when it replaces a result) and marks pieces
+  whose date got newer, or that have imagery where there was none, with `u` (the previous month index, or 0). The
+  hexagon tallies count that length too (`u`, km). With the box ticked, everything else fades, new stretches get a
+  dark casing, the panel shows the new km in view, and popups give the previous date. The box only appears for data
+  built with this.
 - **Place search** with [Photon](https://photon.komoot.io) (free OpenStreetMap geocoder, limited to the UK), and a
   locate-me button.
 - **"Open in Street View"** opens the exact panorama the stretch is dated by: `tiles` looks up each piece's
