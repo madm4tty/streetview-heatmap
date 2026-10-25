@@ -116,9 +116,13 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   own layers, so they are added again once it loads. They go just above the base map's last road or building layer,
   under the labels that follow it: not under its first label, since the dark style has water names low down, and not
   after its boundaries, which the dark style draws after its street names. The dark style also switches town,
-  village and city names off past zoom 12–15; the page keeps them on, as the light style does. On the dark map the
-  new-imagery casing turns light, and the colour-blind palette's wine becomes `#A23B72` (the original is 2.2:1
-  against the near-black map; this passes the separation checks and 3:1).
+  village and city names off past zoom 12–15; the page keeps them on, as the light style does. The dark style is near
+  black, so the page recolours it as it loads (`DARK_MAP_COLOURS`): charcoal land (`#242426`), blue water, green
+  parks, grey roads and light-grey labels, in the spirit of Apple Maps' dark mode, with the panel in matching greys.
+  Roads stay grey so the base map never borrows the age colours. On the dark map the new-imagery casing turns light,
+  and each palette's oldest colour is lightened to reach 3:1 against the charcoal: `#c9354f` for the classic palette
+  (its other checks no worse) and `#B04A84` for the colour-blind one (colour-blind separation 7, just under the
+  target of 8; popups give the date as text).
 - **Place search** with [Photon](https://photon.komoot.io) (free OpenStreetMap geocoder, limited to the UK), and a
   locate-me button.
 - **"Open in Street View"** opens the exact panorama the stretch is dated by: `tiles` looks up each piece's

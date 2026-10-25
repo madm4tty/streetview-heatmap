@@ -31,16 +31,17 @@
     --accent: #2563eb;
     --map-bg: #f2f3f0;  /* the base map's background, shown while it loads */
   }
+  /* Neutral charcoal greys, to match the recoloured dark map (DARK_MAP_COLOURS) */
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --panel-bg: #111827;
-    --panel-fg: #f3f4f6;
-    --muted: #9ca3af;
-    --border: #374151;
-    --track: #273142;
-    --hover: #1f2937;
-    --accent: #60a5fa;
-    --map-bg: #0c0c0c;
+    --panel-bg: #1c1c1e;
+    --panel-fg: #f2f2f7;
+    --muted: #98989d;
+    --border: #38383a;
+    --track: #2c2c2e;
+    --hover: #2c2c2e;
+    --accent: #0a84ff;
+    --map-bg: #242426;
   }
   html, body { margin: 0; height: 100%; background: var(--map-bg); }
   body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -249,9 +250,42 @@
     // viewers; passes the categorical palette checks on every pair
     cvd: ["#0072B2", "#56B4E9", "#009E73", "#E69F00", "#D55E00", "#882255"],
   };
-  // On the dark map the wine is too dark to see (2.2:1); this lighter one keeps
-  // every pair apart for colour-blind viewers and reaches 3:1
-  const DARK_PALETTES = { ...PALETTES, cvd: [...PALETTES.cvd.slice(0, -1), "#A23B72"] };
+  // The oldest colour of each palette is too dark to see on the charcoal map.
+  // Lighter ones there reach 3:1 against it: a crimson for the classic palette
+  // (its other checks no worse), and a wine that keeps colour-blind separation
+  // at 7, just under the target of 8 (popups give the date as text)
+  const DARK_PALETTES = {
+    classic: [...PALETTES.classic.slice(0, -1), "#c9354f"],
+    cvd: [...PALETTES.cvd.slice(0, -1), "#B04A84"],
+  };
+  // OpenFreeMap's dark style is near black. Recolour it in charcoal greys with
+  // blue water and green parks, in the spirit of Apple Maps' dark mode. Roads
+  // stay grey, so the base map never borrows the age colours. First match wins.
+  const DARK_MAP_COLOURS = [
+    [/^background$/, { "background-color": "#242426" }],
+    [/^(water|waterway)$/, { "fill-color": "#1b2b3d", "line-color": "#1b2b3d" }],
+    [/^water_name$/, { "text-color": "#7d9ab8", "text-halo-color": "#1b2b3d" }],
+    [/^landcover_(ice_shelf|glacier)$/, { "fill-color": "#3a3a3c" }],
+    [/^landuse_residential$/, { "fill-color": "#2a2a2c" }],
+    [/^(landcover_wood|landuse_park)$/, { "fill-color": "#26352b" }],
+    [/^building$/, { "fill-color": "#323235", "fill-outline-color": "#3d3d40" }],
+    [/^aeroway-area$/, { "fill-color": "#2e2e31" }],
+    [/^aeroway-/, { "line-color": "#48484a" }],
+    [/^road_area_pier$/, { "fill-color": "#242426" }],
+    [/^road_pier$/, { "line-color": "#242426" }],
+    [/^highway_path$/, { "line-color": "#3a3a3c" }],
+    [/^highway_minor$/, { "line-color": "#424245" }],
+    [/^highway_(major|motorway)_casing$/, { "line-color": "#3a3a3c" }],
+    [/^highway_major_inner$/, { "line-color": "#545458" }],
+    [/^highway_motorway_inner$/, { "line-color": "#68686d" }],
+    [/^highway_\w+_subtle$/, { "line-color": "#4a4a4e" }],
+    [/^railway\w*_dashline$/, { "line-color": "#242426" }],
+    [/^railway/, { "line-color": "#4a4a4d" }],
+    [/^highway_name_/, { "text-color": "#aeaeb2", "text-halo-color": "#242426" }],
+    [/^boundary_/, { "line-color": "#636366" }],
+    [/^place_(state|country)/, { "text-color": "#aeaeb2", "text-halo-color": "rgba(36,36,38,0.85)" }],
+    [/^place_/, { "text-color": "#d1d1d6", "text-halo-color": "rgba(36,36,38,0.85)" }],
+  ];
   const MAP_STYLES = {
     light: "https://tiles.openfreemap.org/styles/positron",
     dark: "https://tiles.openfreemap.org/styles/dark",
@@ -736,7 +770,24 @@
   // Changing theme swaps the base map style, which drops our sources and layers;
   // they go back on once the new style has loaded.
   let styleReady = true;  // false while a new base map style loads
-  map.on("style.load", () => { styleReady = true; keepPlaceNames(); addDataLayers(); });
+  map.on("style.load", () => {
+    styleReady = true;
+    if (mapTheme === "dark") recolourDarkMap();
+    keepPlaceNames();
+    addDataLayers();
+  });
+
+  function recolourDarkMap() {
+    for (const layer of map.getStyle().layers) {
+      const colours = DARK_MAP_COLOURS.find(([pattern]) => pattern.test(layer.id))?.[1] || {};
+      for (const [prop, value] of Object.entries(colours)) {
+        // Only properties this kind of layer has (water is a fill, waterway a line)
+        if (prop.startsWith(layer.type === "background" ? "background" : layer.type === "symbol" ? "text" : layer.type)) {
+          map.setPaintProperty(layer.id, prop, value);
+        }
+      }
+    }
+  }
 
   // The dark base map hides town, village and city names past zoom 12–15,
   // leaving street level with no place names. Keep them on, as the light one
