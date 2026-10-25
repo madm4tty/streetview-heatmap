@@ -137,7 +137,7 @@ jobs:
         if: always() && steps.pull.outcome == 'success'
         run: python3 -m pipeline.run push-state --area "$AREA"
 
-      # Tiles, plus the shard's hexagon tallies for the overview
+      # Tiles, plus the shard's hexagon tallies and top-ten candidates for the overview
       - run: python3 -m pipeline.run tiles --area "$AREA"
 
       - uses: actions/upload-artifact@v4
@@ -146,6 +146,7 @@ jobs:
           path: |
             pipeline/data/site/${{ matrix.shard }}.pmtiles
             pipeline/data/${{ matrix.shard }}.hexstats.json
+            pipeline/data/${{ matrix.shard }}.toplists.json
           retention-days: 3
 
   publish:
@@ -173,7 +174,7 @@ jobs:
           key: tippecanoe-${{ env.TIPPECANOE_VERSION }}-with-tile-join-${{ runner.os }}
           fail-on-cache-miss: true
 
-      # Each artifact holds site/uk-N.pmtiles and uk-N.hexstats.json, relative to pipeline/data
+      # Each artifact holds site/uk-N.pmtiles, uk-N.hexstats.json and uk-N.toplists.json, relative to pipeline/data
       - uses: actions/download-artifact@v4
         with:
           pattern: tiles-*

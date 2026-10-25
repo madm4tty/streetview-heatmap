@@ -142,8 +142,12 @@ def _feature(cell: str, res: int, props: Dict) -> Dict:
             "properties": {"r": res, **props}}
 
 
-def top_updated(stats: HexStats, res: int = TOP_AREAS_RES, n: int = TOP_AREAS) -> List[Dict]:
-    """The `n` areas with the most new imagery: centre (x, y) and kilometres, most first."""
+def top_updated(stats: HexStats, res: int = TOP_AREAS_RES, n: int = TOP_AREAS,
+                rings: bool = False) -> List[Dict]:
+    """The `n` areas with the most new imagery: centre (x, y) and kilometres, most first.
+
+    With `rings`, also each hexagon's id and outline, for the page to draw.
+    """
     by_area: Dict[str, float] = defaultdict(float)
     for cell, values in stats.items():
         if values.get(UPDATED):
@@ -151,7 +155,10 @@ def top_updated(stats: HexStats, res: int = TOP_AREAS_RES, n: int = TOP_AREAS) -
     top = []
     for cell, metres in sorted(by_area.items(), key=lambda kv: -kv[1])[:n]:
         lat, lng = h3.cell_to_latlng(cell)
-        top.append({"x": round(lng, 3), "y": round(lat, 3), "km": round(metres / 1000, 1)})
+        area = {"x": round(lng, 3), "y": round(lat, 3), "km": round(metres / 1000, 1)}
+        if rings:
+            area.update(id=cell, ring=_feature(cell, res, {})["geometry"]["coordinates"][0])
+        top.append(area)
     return top
 
 

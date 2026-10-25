@@ -49,6 +49,7 @@ class Segment:
     coords: List[Coord]
     cum: List[float] = field(default_factory=list)
     private: bool = False
+    ref: Optional[str] = None  # road number, such as A64
 
     def __post_init__(self):
         if not self.cum:
@@ -116,7 +117,7 @@ def iter_segments(pbf_path: str) -> Iterator[Segment]:
         if not obj.is_way():
             continue
         tags = {k: obj.tags.get(k) for k in (
-            "highway", "name", "area", "footway", "service",
+            "highway", "name", "ref", "area", "footway", "service",
             *{k for keys in (CAR_ACCESS, *PATH_ACCESS) for k in keys})}
         if not include_way(tags):
             continue
@@ -127,7 +128,7 @@ def iter_segments(pbf_path: str) -> Iterator[Segment]:
         if len(coords) < 2:
             continue
         seg = Segment(id=str(obj.id), highway=tags["highway"], name=tags["name"],
-                      coords=coords, private=is_private(tags))
+                      coords=coords, private=is_private(tags), ref=tags["ref"])
         if seg.length >= 1.0:
             yield seg
 

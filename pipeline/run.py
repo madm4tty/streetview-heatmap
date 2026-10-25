@@ -27,7 +27,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from pipeline import areas, measure, overview, publish
+from pipeline import areas, measure, overview, publish, toplists
 from pipeline.cache import Key, MetadataCache
 from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces, piece_panos,
                              save_pieces, updates_since, write_geojsonseq)
@@ -235,22 +235,33 @@ def hexstats_path(area: str) -> str:
     return os.path.join(DATA_DIR, f"{area}.hexstats.json")
 
 
+def toplists_path(area: str) -> str:
+    return os.path.join(DATA_DIR, f"{area}.toplists.json")
+
+
 def overview_path(area: str) -> str:
     return os.path.join(SITE_DIR, f"{area}.overview.json")
 
 
 def write_overview(area: str, parts: List[str]) -> None:
+    """The overview for `area` from the hexagon tallies and top-ten candidates of `parts` (areas)."""
     built = datetime.now(timezone.utc).strftime("%Y-%m")
-    stats = overview.merge_stats(overview.load_json(p) for p in parts)
+    stats = overview.merge_stats(overview.load_json(hexstats_path(p)) for p in parts)
+    fc = overview.build_overview(stats, built)
+    lists = [toplists_path(p) for p in parts]
+    missing = [p for p in lists if not os.path.exists(p)]
+    if missing:
+        logger.warning("No top-ten candidates in %s; those areas are left out of the lists", ", ".join(missing))
+    fc["toplists"] = toplists.merge((toplists.load(p) for p in lists if p not in missing), stats)
     os.makedirs(SITE_DIR, exist_ok=True)
-    overview.save_json(overview.build_overview(stats, built), overview_path(area))
+    overview.save_json(fc, overview_path(area))
     logger.info("Wrote %s (%d hexagons)", overview_path(area), len(stats))
 
 
 def cmd_overview(args) -> None:
     spec = areas.get_area(args.area)
-    parts = [hexstats_path(a) for a in spec.get("shards", [args.area])]
-    missing = [p for p in parts if not os.path.exists(p)]
+    parts = spec.get("shards", [args.area])
+    missing = [hexstats_path(a) for a in parts if not os.path.exists(hexstats_path(a))]
     if missing:
         raise SystemExit(f"Missing {', '.join(missing)}. Run `tiles` for those areas first.")
     write_overview(args.area, parts)
@@ -264,16 +275,6 @@ def cmd_tiles(args) -> None:
     if updates is not None:
         logger.info("New imagery on %d of %d pieces since the previous result",
                     sum(1 for u in updates if u is not None), len(pieces))
-    # Hexagon tallies: merged across shards later for the UK, or straight into
-    # this area's overview otherwise
-    points = overview.piece_points(pieces, segments)
-    if updates is not None:
-        points = overview.with_updates(points, updates)
-    overview.save_json(overview.hex_stats(points), hexstats_path(args.area))
-    if "cells" not in areas.get_area(args.area):
-        write_overview(args.area, [hexstats_path(args.area)])
-    os.makedirs(SITE_DIR, exist_ok=True)
-    geojsonseq = os.path.join(DATA_DIR, f"{args.area}.geojsonl")
     panos = None
     if os.path.exists(cache_path(args.area)):
         cache = MetadataCache(cache_path(args.area))
@@ -282,6 +283,17 @@ def cmd_tiles(args) -> None:
         finally:
             cache.close()
         logger.info("Panorama IDs for %d of %d pieces", sum(1 for x in panos if x), len(pieces))
+    # Hexagon tallies and top-ten candidates: merged across shards later for
+    # the UK, or straight into this area's overview otherwise
+    toplists.save(toplists.shard_lists(pieces, segments, updates, panos), toplists_path(args.area))
+    points = overview.piece_points(pieces, segments)
+    if updates is not None:
+        points = overview.with_updates(points, updates)
+    overview.save_json(overview.hex_stats(points), hexstats_path(args.area))
+    if "cells" not in areas.get_area(args.area):
+        write_overview(args.area, [args.area])
+    os.makedirs(SITE_DIR, exist_ok=True)
+    geojsonseq = os.path.join(DATA_DIR, f"{args.area}.geojsonl")
     n = write_geojsonseq(pieces, segments, geojsonseq, panos, updates)
     logger.info("Wrote %d features to %s", n, geojsonseq)
     pmtiles = os.path.join(SITE_DIR, f"{args.area}.pmtiles")

@@ -229,8 +229,12 @@ def history_entry(overview: Dict, archive: str, now: datetime) -> Optional[Dict]
     """
     if "totals" not in overview:
         return None
-    return {"stamp": f"{now:%Y%m%d-%H%M%S}", "built": overview.get("built"), "overview": archive,
-            **overview["totals"], "top": overview.get("top", [])}
+    entry = {"stamp": f"{now:%Y%m%d-%H%M%S}", "built": overview.get("built"), "overview": archive,
+             **overview["totals"], "top": overview.get("top", [])}
+    if "toplists" in overview:
+        from pipeline.toplists import compact  # only what the next build's page compares with
+        entry["lists"] = compact(overview["toplists"])
+    return entry
 
 
 def read_history(client, bucket: str, key: str) -> Dict:
