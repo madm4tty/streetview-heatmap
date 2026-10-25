@@ -111,6 +111,15 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   paths with imagery under a year old at each update. Any past update can be shown as hexagons (roads are always
   the latest build's), with ages as of that update; `#build=<stamp>` links to it. Builds published before this
   have no history entry.
+- **Top tens**: a button in the panel opens a second panel (a drawer on phones) of lists that change from build to
+  build: oldest roads still waiting for an update, biggest leaps (old date → new date), most updated roads and newly
+  covered roads in this update, and the busiest areas (H3 resolution-5 hexagons, about 250 km², named with Photon).
+  Road lists are roads only (no paths, service roads or private ways) and stretches of 200 m or more; a road is
+  grouped by its `ref` (A64) across the UK, else by name within an area hexagon, else is its own OSM way. `tiles`
+  writes each shard's best candidates (`<area>.toplists.json`, `pipeline/toplists.py`) and `overview` merges them
+  into the overview's `toplists`; a compact copy goes into each history entry, so the oldest list can mark roads new
+  to it and name those that left it since the update before. Clicking an entry flies there, outlines the road or
+  area, and opens a popup with the exact panorama. `#top=<list>` links to an open list.
 - **Theme**: Device (the default, following the device's light or dark setting), Light or Dark, remembered on that
   device (not put in shared links). Dark swaps the base map for OpenFreeMap's `dark` style, which drops the page's
   own layers, so they are added again once it loads. They go just above the base map's last road or building layer,

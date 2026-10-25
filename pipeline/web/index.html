@@ -167,6 +167,34 @@
   [data-theme="dark"] .maplibregl-ctrl-attrib-button { filter: invert(1) hue-rotate(180deg); }
   [data-theme="dark"] .maplibregl-ctrl-attrib a { color: var(--panel-fg); }
 
+  /* Top tens: a second panel beside the first (on phones, a drawer over it) */
+  .wide-btn {
+    width: 100%; margin-top: 12px; font: inherit; color: inherit; background: none; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; min-height: 36px; text-align: left;
+  }
+  .wide-btn:hover { background: var(--hover); }
+  .toptens { left: 324px; z-index: 4; }
+  .toptens h2 { font-size: 15px; margin: 0; }
+  .toptens select {
+    width: 100%; margin-top: 10px; font: inherit; color: inherit; background: transparent;
+    border: 1px solid var(--border); border-radius: 6px; padding: 6px; min-height: 36px;
+  }
+  .toptens p { margin: 8px 0; }
+  .toprows { list-style: none; margin: 4px 0; padding: 0; }
+  .toprows button {
+    display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: 8px; align-items: baseline;
+    width: 100%; font: inherit; color: inherit; text-align: left;
+    background: none; border: 0; border-radius: 6px; padding: 6px 4px; cursor: pointer; min-height: 40px;
+  }
+  .toprows button:hover, .toprows button[aria-current="true"] { background: var(--hover); }
+  .toprows .rank { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .toprows .sub { display: block; color: var(--muted); font-size: 12px; }
+  .toprows .num { text-align: right; }
+  .badge {
+    display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 11px;
+    background: var(--track); color: var(--panel-fg); vertical-align: 1px;
+  }
+
   /* Phones: the panel becomes a drawer along the bottom, closed to start with */
   @media (max-width: 640px) {
     .panel {
@@ -175,6 +203,7 @@
     }
     .panel.closed #panel-body { display: none; }
     .panel.closed { padding-bottom: 8px; }
+    .toptens { left: 0; }
     /* Keep the attribution and scale clear of the closed drawer */
     .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { bottom: 52px; }
   }
@@ -218,6 +247,9 @@
         </span>
       </div>
     </div>
+    <button type="button" class="wide-btn" id="open-toptens" aria-controls="toptens" aria-expanded="false" hidden>
+      Top tens: oldest roads, biggest leaps and more →
+    </button>
     <details class="updates" id="updates" hidden>
       <summary id="digest-head"></summary>
       <p class="small" id="digest-body"></p>
@@ -232,6 +264,23 @@
     </details>
     <p class="muted small" id="as-of"></p>
   </div>
+</aside>
+<aside class="panel toptens" id="toptens" aria-label="Top tens" hidden>
+  <div class="panel-head">
+    <h2>Top tens</h2>
+    <button class="text-btn" id="close-toptens">Close</button>
+  </div>
+  <select id="toplist" aria-label="Which list">
+    <option value="oldest">Oldest roads still waiting</option>
+    <option value="leaps">Biggest leaps this update</option>
+    <option value="updated">Most updated roads this update</option>
+    <option value="covered">Newly covered roads</option>
+    <option value="areas">Busiest areas this update</option>
+  </select>
+  <p class="small muted" id="toplist-about"></p>
+  <ol class="toprows" id="toplist-rows"></ol>
+  <p class="small muted" id="toplist-gone" hidden></p>
+  <p class="small muted" id="toplist-note"></p>
 </aside>
 <script>
   // Age bands in months. Edges match BAND_EDGES_MONTHS in pipeline/overview.py
@@ -498,8 +547,9 @@
     const dark = mapTheme === "dark";
     // A past update has hexagons only: the road tiles are always the latest
     const past = Boolean(state.build);
-    // The casing round new imagery stands out against the base map
+    // The casing round new imagery, and the halo round a top-ten pick, stand out against the base map
     map.setPaintProperty("new-imagery", "line-color", dark ? "#f9fafb" : "#111827");
+    map.setPaintProperty("top-pick", "line-color", dark ? "#f9fafb" : "#111827");
     for (const id of ["imagery", "no-imagery", "private"]) map.setPaintProperty(id, "line-opacity", roadOpacity());
     map.setFilter("new-imagery", ["all", isNew, typeFilter()]);
     map.setLayoutProperty("new-imagery", "visibility", highlighting() && !past ? "visible" : "none");
@@ -581,6 +631,16 @@
       paint: { "line-width": widthExpr },
       layout: { "line-cap": "round", "line-join": "round" },
     }, firstLabel);
+    // A soft halo under the road or round the area picked from a top ten
+    const isArea = ["==", ["geometry-type"], "Polygon"];
+    map.addSource("top-pick", { type: "geojson", data: topPick || EMPTY });
+    map.addLayer({
+      id: "top-pick", type: "line", source: "top-pick",
+      paint: { "line-blur": 2, "line-opacity": 0.45,
+               "line-width": ["interpolate", ["linear"], ["zoom"],
+                 6, ["case", isArea, 3, 8], 12, ["case", isArea, 3, 16], 16, ["case", isArea, 4, 28]] },
+      layout: { "line-cap": "round", "line-join": "round" },
+    }, "imagery");
     applyStyle();
   }
 
@@ -603,6 +663,7 @@
     updateInView();
     if (state.build) await viewBuild(state.build);
     renderUpdates();
+    setUpTopTens();
   });
 
   // --- "In view" numbers ---------------------------------------------------
@@ -1041,6 +1102,120 @@
       show(i);
     };
     svg.onpointerleave = () => { cross.setAttribute("visibility", "hidden"); show(rest); };
+  }
+
+  // --- Top tens ------------------------------------------------------------------
+  // Lists from the latest build (`toplists` in its overview): roads with the
+  // oldest imagery still waiting, and what changed in this update. The oldest
+  // list marks roads that are new to it since the update before.
+  const EMPTY = { type: "FeatureCollection", features: [] };
+  let topPick = null;  // the highlighted road or area, kept across changes of base map
+  let topPopup = null;
+  const TOP_LISTS = {
+    oldest: { about: "Roads with the oldest Street View still waiting for an update.",
+              value: r => shortMonth(r.m), sub: r => `${kmText(r.km)} km` },
+    leaps: { about: "Roads whose imagery jumped furthest forward in this update.",
+             value: r => `${Math.floor(r.fr / 12)} → ${Math.floor(r.to / 12)}`,
+             sub: r => `${Math.round((r.to - r.fr) / 12)} years newer · ${kmText(r.km)} km` },
+    updated: { about: "Roads with the most new imagery in this update.", value: r => `${kmText(r.km)} km` },
+    covered: { about: "Roads with Street View for the first time in this update.", value: r => `${kmText(r.km)} km` },
+    areas: { about: "Areas of about 250 km² with the most new imagery in this update.",
+             value: r => `${kmText(r.km)} km` },
+  };
+  const topPanel = document.getElementById("toptens");
+  const topSelect = document.getElementById("toplist");
+  const topButton = document.getElementById("open-toptens");
+  const topRows = document.getElementById("toplist-rows");
+  const isPhone = () => window.matchMedia("(max-width: 640px)").matches;
+  const shortMonth = index => new Date(Math.floor(index / 12), index % 12)
+    .toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+
+  function currentLists() { return latestOverview?.toplists || null; }
+
+  function setTopOpen(open) {
+    topPanel.hidden = !open;
+    topButton.setAttribute("aria-expanded", String(open));
+    writeHash({ top: open ? topSelect.value : null });
+    if (open) renderTopList();
+  }
+
+  function renderTopList() {
+    const name = topSelect.value, spec = TOP_LISTS[name];
+    const rows = currentLists()?.[name] || [];
+    // The update before's list, to mark roads new to the oldest list and those gone from it
+    const before = builds.length > 1 ? builds[builds.length - 2].lists?.[name] : null;
+    const beforeIds = new Set((before || []).map(r => r.id));
+    document.getElementById("toplist-about").textContent = spec.about;
+    topRows.innerHTML = rows.length ? rows.map((r, i) => {
+      const fresh = name === "oldest" && before && !beforeIds.has(r.id);
+      const title = name === "areas" ? `${r.y.toFixed(2)}, ${r.x.toFixed(2)}` : escapeHtml(r.name);
+      return `<li><button type="button" data-i="${i}">
+        <span class="rank">${i + 1}</span>
+        <span><span class="title">${title}</span>${fresh ? '<span class="badge">New</span>' : ""}
+          <span class="sub place"></span>${spec.sub ? `<span class="sub">${spec.sub(r)}</span>` : ""}</span>
+        <span class="num">${spec.value(r)}</span></button></li>`;
+    }).join("") : `<li class="small muted">Nothing yet: this list compares an update with the one before it.</li>`;
+    const gone = name === "oldest" && before ? before.filter(r => !rows.some(x => x.id === r.id)) : [];
+    const goneLine = document.getElementById("toplist-gone");
+    goneLine.hidden = !gone.length;
+    goneLine.textContent = gone.length ? `No longer on the list since the update before: ${gone.map(r => r.name).join(", ")}.` : "";
+    const built = latestOverview?.built ? monthName(monthIndexOf(latestOverview.built)) : "";
+    document.getElementById("toplist-note").textContent = (name === "areas" ? "" :
+      "Roads only (no paths, driveways or private roads), stretches of 200 m or more. ") +
+      (built ? `From the update checked ${built}.` : "");
+    nameTopRows(name, rows);
+  }
+
+  // Where each entry is, from Photon, one at a time
+  async function nameTopRows(name, rows) {
+    for (const btn of topRows.querySelectorAll("button")) {
+      if (!btn.isConnected || topSelect.value !== name) return;
+      const r = rows[Number(btn.dataset.i)];
+      const place = await placeName(r);
+      if (!place || !btn.isConnected) continue;
+      btn.querySelector(name === "areas" ? ".title" : ".place").textContent = place;
+    }
+  }
+
+  async function showTopEntry(name, i) {
+    const r = currentLists()[name][i];
+    if (state.build) await viewBuild(null);  // roads only show for the latest update
+    const geometry = r.line ? { type: "LineString", coordinates: r.line } : { type: "Polygon", coordinates: [r.ring] };
+    topPick = { type: "Feature", geometry, properties: {} };
+    map.getSource("top-pick")?.setData(topPick);
+    const pts = r.line || r.ring;
+    const bounds = pts.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(pts[0], pts[0]));
+    // Keep the pick clear of the panels on the left
+    const left = isPhone() ? 40 : Math.min(660, window.innerWidth / 2);
+    map.fitBounds(bounds, { padding: { top: 60, bottom: isPhone() ? 80 : 60, right: 60, left },
+                            maxZoom: r.line ? 16 : 10.5 });
+    const spec = TOP_LISTS[name];
+    let html = `<h2>${escapeHtml(r.name || (await placeName(r)) || "This area")}</h2><div>${spec.value(r)}` +
+      (spec.sub ? ` · ${spec.sub(r)}` : "") + "</div>";
+    if (r.line) {
+      const svUrl = "https://www.google.com/maps/@?api=1&map_action=pano" +
+        (r.pano ? `&pano=${encodeURIComponent(r.pano)}` : "") + `&viewpoint=${r.y},${r.x}`;
+      html += `<a href="${svUrl}" target="_blank" rel="noopener">Open in Street View →</a>`;
+    }
+    topPopup?.remove();
+    topPopup = new maplibregl.Popup({ maxWidth: "260px" }).setLngLat([r.x, r.y]).setHTML(html).addTo(map);
+    topRows.querySelectorAll("button").forEach(b => b.setAttribute("aria-current", String(Number(b.dataset.i) === i)));
+    if (isPhone()) { topPanel.hidden = true; setPanelOpen(false); }
+  }
+
+  topButton.addEventListener("click", () => setTopOpen(topPanel.hidden));
+  document.getElementById("close-toptens").addEventListener("click", () => setTopOpen(false));
+  topSelect.addEventListener("change", () => { writeHash({ top: topSelect.value }); renderTopList(); });
+  topRows.addEventListener("click", e => {
+    const btn = e.target.closest("button");
+    if (btn) showTopEntry(topSelect.value, Number(btn.dataset.i));
+  });
+  // Called once the latest overview has loaded
+  function setUpTopTens() {
+    if (!currentLists()) return;  // built before the lists existed
+    topButton.hidden = false;
+    const wanted = initial.get("top");
+    if (wanted in TOP_LISTS) { topSelect.value = wanted; setTopOpen(true); }
   }
 
   // --- Popups ----------------------------------------------------------------

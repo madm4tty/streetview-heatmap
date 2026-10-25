@@ -40,6 +40,8 @@ python3 -m pipeline.run overview --area uk              # merge shard hexagon ta
 - `pipeline/refresh.py`: monthly refresh via one sentinel per 250 m cell
 - `pipeline/export.py`: GeoJSONSeq and tippecanoe
 - `pipeline/overview.py`: H3 hexagon tallies per area, merged into the overview the page shows at low zoom
+- `pipeline/toplists.py`: the page's top tens (oldest roads waiting, biggest leaps, most updated, newly covered,
+  busiest areas), per shard in `tiles` and merged by `overview`
 - `pipeline/publish.py`: R2 upload under a secret prefix, the build history (`history/`), and state sync
 - `pipeline/web/index.html`: MapLibre page; `DEFAULT_TILES`, `DEFAULT_OVERVIEW` and `DEFAULT_HISTORY` are rewritten
   by `publish`

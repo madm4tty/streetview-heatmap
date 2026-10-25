@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pipeline import areas, measure, overview, publish, run, shards
+from pipeline import areas, measure, overview, publish, run, shards, toplists
 from pipeline.cache import Lookup, MetadataCache, make_key
 from pipeline.export import (agreement_by_length, month_index, piece_panos, piece_properties,
                              updates_since, write_geojsonseq)
@@ -729,6 +729,80 @@ class TestPrivateWays:
         assert summary["n"] == pytest.approx(public.length / 1000, abs=0.06)
         assert summary["k"] == pytest.approx((public.length + private.length) / 1000, abs=0.06)
         assert summary["b2"] == pytest.approx((private.length - 500) / 1000, abs=0.06)
+
+
+class TestTopTens:
+    def _seg(self, seg_id, row, highway="residential", name=None, ref=None, private=False):
+        # About 985 m east-west, one row per road so they don't overlap
+        lat = 53.8 + row * 0.002
+        return Segment(id=seg_id, highway=highway, name=name, coords=[(lat, -1.55), (lat, -1.535)],
+                       private=private, ref=ref)
+
+    def _shard(self):
+        segs = [self._seg("mill", 0, name="Mill Lane"), self._seg("a64a", 1, "trunk", ref="A64"),
+                self._seg("a64b", 2, "trunk", "York Road", ref="A64"), self._seg("new", 3, name="New Road"),
+                self._seg("path", 4, "footway"), self._seg("frag", 5), self._seg("gated", 6, private=True)]
+        pieces = [Piece("mill", 0, 300, "2008-06"), Piece("mill", 300, 985, "2020-01"),
+                  Piece("a64a", 0, 400, "2026-09"), Piece("a64a", 400, 985, "2015-01"),
+                  Piece("a64b", 0, 985, "2026-09"),
+                  Piece("new", 0, 600, "2026-09"), Piece("new", 600, 985, NO_COVERAGE),
+                  Piece("path", 0, 985, "2005-01"),                     # paths aren't listed
+                  Piece("frag", 0, 100, "2007-01"), Piece("frag", 100, 985, "2019-01"),  # too short
+                  Piece("gated", 0, 985, "2006-01")]                    # private
+        updates = [None, None, month_index("2009-03"), None, month_index("2012-01"),
+                   0, None, None, None, None, None]
+        panos = ["pano-mill", None, "pano-a64", None, None, None, None, None, None, None, None]
+        return toplists.shard_lists(pieces, segs, updates, panos)
+
+    def test_oldest_waiting_skips_paths_private_and_fragments(self):
+        oldest = self._shard()["oldest"]
+        assert [(r["name"], r["m"]) for r in oldest[:2]] == [
+            ("Mill Lane", month_index("2008-06")), ("A64", month_index("2015-01"))]
+        assert oldest[0]["pano"] == "pano-mill" and oldest[0]["km"] == 0.3
+        assert len(oldest[0]["line"]) >= 2 and oldest[0]["line"][0][0] == pytest.approx(-1.55, abs=0.001)
+        names = {r["name"] for r in oldest}
+        assert not names & {"Unnamed footway road"} and all(r["m"] > month_index("2007-01") for r in oldest)
+
+    def test_road_numbers_group_across_ways(self):
+        lists = self._shard()
+        a64 = next(r for r in lists["updated"] if r["id"] == "ref:A64")
+        assert a64["km"] == pytest.approx(1.385, abs=0.01)    # both ways' new stretches
+        assert lists["leaps"][0]["id"] == "ref:A64"
+        assert (lists["leaps"][0]["fr"], lists["leaps"][0]["to"]) == (month_index("2009-03"), month_index("2026-09"))
+        assert [r["name"] for r in lists["covered"]] == ["New Road"]
+
+    def test_merge_adds_shards_and_ranks_areas(self):
+        part = self._shard()
+        stats = overview.hex_stats([(53.8, -1.55, 4000.0, overview.UPDATED), (51.5, -0.12, 900.0, overview.UPDATED)])
+        merged = toplists.merge([part, part], stats)
+        a64 = next(r for r in merged["updated"] if r["id"] == "ref:A64")
+        assert a64["km"] == pytest.approx(2.77, abs=0.02)     # the same road in two shards adds up
+        assert len(merged["oldest"]) <= toplists.TOP_N
+        assert [a["km"] for a in merged["areas"]] == [4.0, 0.9]
+        assert merged["areas"][0]["id"] and len(merged["areas"][0]["ring"]) == 7
+
+    def test_without_a_previous_result_only_oldest(self):
+        segs = [self._seg("mill", 0, name="Mill Lane")]
+        lists = toplists.shard_lists([Piece("mill", 0, 985, "2010-01")], segs)
+        assert len(lists["oldest"]) == 1 and lists["leaps"] == lists["updated"] == lists["covered"] == []
+
+    def test_overview_step_merges_shard_files(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(run, "DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(run, "SITE_DIR", str(tmp_path / "site"))
+        for shard in ("uk-1", "uk-2"):
+            overview.save_json(overview.hex_stats([(53.8, -1.55, 1000.0, "2020-01")]), run.hexstats_path(shard))
+        toplists.save(self._shard(), run.toplists_path("uk-1"))   # uk-2's is missing: left out, not fatal
+        run.write_overview("uk", ["uk-1", "uk-2"])
+        fc = overview.load_json(run.overview_path("uk"))
+        assert fc["totals"]["k"] == 2.0 and fc["toplists"]["oldest"][0]["name"] == "Mill Lane"
+
+    def test_history_keeps_a_compact_copy(self, tmp_path):
+        fc = {"built": "2026-11", "totals": {"k": 1.0}, "top": [],
+              "toplists": toplists.merge([self._shard()], None)}
+        entry = publish.history_entry(fc, "history/uk-x.overview.json", datetime(2026, 11, 2, tzinfo=timezone.utc))
+        assert entry["lists"]["oldest"][0] == {"id": "name:Mill Lane|" + entry["lists"]["oldest"][0]["id"].split("|")[1],
+                                              "name": "Mill Lane", "km": 0.3, "m": month_index("2008-06")}
+        assert "line" not in json.dumps(entry)
 
 
 class TestFullRebuild:
