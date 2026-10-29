@@ -12,10 +12,12 @@ Usage:
     python3 -m pipeline.run pull-state --area leeds        # restore cache from R2
     python3 -m pipeline.run push-state --area leeds        # save cache to R2
     python3 -m pipeline.run measure  --pbf uk.osm.pbf      # size up a big extract, no API calls
+    python3 -m pipeline.run audit    --area uk             # how much new imagery would a refresh miss?
 """
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import shutil
@@ -27,7 +29,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from pipeline import areas, measure, overview, publish, toplists
+from pipeline import areas, audit, measure, overview, publish, toplists
 from pipeline.cache import Key, MetadataCache
 from pipeline.export import (agreement_by_length, build_pmtiles, load_pieces, piece_panos,
                              save_pieces, updates_since, write_geojsonseq)
@@ -218,6 +220,50 @@ def cmd_refresh(args) -> None:
     print(f"Next: python3 -m pipeline.run tiles --area {args.area}")
 
 
+def cmd_audit(args) -> None:
+    """Probe random points against the saved result; nothing is saved but the report."""
+    parts = areas.get_area(args.area).get("shards", [args.area])
+    missing = [pieces_path(a, "bisect") for a in parts if not os.path.exists(pieces_path(a, "bisect"))]
+    if missing:
+        raise SystemExit(f"Missing {', '.join(missing)}. Run: python3 -m pipeline.run pull-state "
+                         f"--pieces-only --area <area> for each.")
+    # A throwaway cache: every lookup is fresh, and the pipeline's own cache is untouched
+    scratch = os.path.join(DATA_DIR, "audit.cache.sqlite")
+    if os.path.exists(scratch):
+        os.remove(scratch)
+    client = StreetViewClient(get_api_key(), MetadataCache(scratch), concurrency=args.concurrency,
+                              rate_per_second=args.rate, max_calls=args.max_calls)
+
+    async def resolve_fresh(keys: List[Key]) -> Dict[Key, str]:
+        return {k: classify(v) for k, v in (await client.lookup_many(keys)).items()}
+
+    now = datetime.now(timezone.utc)
+    total, per_area = audit.AuditResult(), {}
+    try:
+        for i, area in enumerate(parts):
+            result = asyncio.run(audit.audit(
+                load_area_segments(area), load_pieces(pieces_path(area, "bisect")), resolve_fresh,
+                probes=args.probes, seed=args.seed + i, cell_m=args.cell_m,
+                now_index=now.year * 12 + now.month - 1))
+            per_area[area] = result.to_json()
+            logger.info("%s: %s", area, dict(result.outcomes))
+            total.add(result)
+    except (FatalAPIError, BudgetExceeded) as exc:
+        raise SystemExit(f"Stopped after {client.api_calls:,} API calls: {exc}")
+    finally:
+        client.cache.close()
+        os.remove(scratch)
+
+    report = audit.report_markdown(total, f"Refresh audit: {args.area}, {now.day} {now:%B %Y}")
+    with open(args.out + ".md", "w", encoding="utf-8") as f:
+        f.write(report)
+    with open(args.out + ".json", "w") as f:
+        json.dump({"area": args.area, "date": now.isoformat(), "total": total.to_json(),
+                   "areas": per_area}, f, indent=1)
+    print("\n" + report)
+    print(f"API calls: {client.api_calls:,}. Wrote {args.out}.md and {args.out}.json")
+
+
 def cmd_compare(args) -> None:
     paths = [pieces_path(args.area, m) for m in ("dense", "bisect")]
     for p in paths:
@@ -336,8 +382,8 @@ def cmd_publish_page(args) -> None:
 
 def cmd_pull_state(args) -> None:
     bucket = publish.state_bucket()
-    written = publish.pull_state(publish.r2_client(bucket), bucket, state_paths(args.area),
-                                 force=args.force)
+    paths = [pieces_path(args.area, "bisect")] if args.pieces_only else state_paths(args.area)
+    written = publish.pull_state(publish.r2_client(bucket), bucket, paths, force=args.force)
     print(f"\nRestored {len(written)} file(s) from the {bucket} bucket")
 
 
@@ -353,7 +399,7 @@ def main(argv=None) -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name in ("download", "estimate", "sample", "compare", "tiles", "refresh",
-                 "publish", "publish-page", "pull-state", "push-state", "overview"):
+                 "publish", "publish-page", "pull-state", "push-state", "overview", "audit"):
         p = sub.add_parser(name)
         p.add_argument("--area", required=True, choices=sorted(areas.AREAS))
         if name in ("sample", "tiles"):
@@ -372,7 +418,15 @@ def main(argv=None) -> None:
                            help="Sentinel grid cell size in metres (default 250)")
             p.add_argument("--max-age-days", type=float, default=25.0,
                            help="Re-query lookups older than this (default 25)")
-        if name in ("sample", "refresh"):
+        if name == "audit":
+            p.add_argument("--probes", type=int, default=5000,
+                           help="Random points per area, or per shard for the UK (default 5000)")
+            p.add_argument("--seed", type=int, default=1,
+                           help="Seed for the random points, so a re-run picks the same ones")
+            p.add_argument("--cell-m", type=float, default=250.0,
+                           help="Sentinel grid cell size in metres, as for refresh (default 250)")
+            p.add_argument("--out", default="audit", help="Report path without extension (default audit)")
+        if name in ("sample", "refresh", "audit"):
             p.add_argument("--concurrency", type=int, default=50)
             p.add_argument("--rate", type=float, default=300.0,
                            help="Max API requests per second (Google allows 500; default 300)")
@@ -383,6 +437,8 @@ def main(argv=None) -> None:
         if name == "pull-state":
             p.add_argument("--force", action="store_true",
                            help="Replace local files with the copies in R2")
+            p.add_argument("--pieces-only", action="store_true",
+                           help="Only the last result, not the lookup cache (enough for audit)")
 
     p = sub.add_parser("measure", help="Road length and lookup estimates for an extract")
     p.add_argument("--pbf", required=True, help="Path to an .osm.pbf extract")
@@ -395,7 +451,7 @@ def main(argv=None) -> None:
      "compare": cmd_compare, "tiles": cmd_tiles, "refresh": cmd_refresh,
      "publish": cmd_publish, "pull-state": cmd_pull_state,
      "publish-page": cmd_publish_page, "push-state": cmd_push_state, "measure": cmd_measure,
-     "overview": cmd_overview}[args.command](args)
+     "overview": cmd_overview, "audit": cmd_audit}[args.command](args)
 
 
 if __name__ == "__main__":

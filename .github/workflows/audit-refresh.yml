@@ -1,0 +1,72 @@
+name: Audit refresh
+
+# Manual only. Checks random points along the roads against each shard's last
+# saved result, and the sentinels a refresh would check for them, to measure how
+# much new imagery the monthly refresh misses (see pipeline/audit.py). Reads the
+# results from R2 but saves and publishes nothing. About 30 minutes; the report
+# is in the run summary and the audit artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      probes:
+        description: Random points per shard (there are 10)
+        type: number
+        default: 5000
+
+# Its own group: sharing the build's would let a queued audit cancel a queued
+# monthly build. The low rate keeps the two under Google's 500 requests/s if
+# they ever overlap.
+concurrency:
+  group: audit-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python3 -m pip install -r pipeline/requirements.txt
+
+      - name: Download the UK extract and keep only highways
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
+          mkdir -p pipeline/data
+          curl -fsSL -o uk-full.osm.pbf https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf
+          osmium tags-filter uk-full.osm.pbf w/highway -o pipeline/data/united-kingdom-latest.osm.pbf
+          rm uk-full.osm.pbf
+
+      # The last result only, not the lookup caches, which the audit doesn't use
+      - name: Restore each shard's last result from R2
+        run: |
+          for n in $(seq 1 10); do
+            python3 -m pipeline.run pull-state --pieces-only --area "uk-$n"
+          done
+
+      - name: Audit
+        env:
+          PROBES: ${{ inputs.probes }}
+        run: |
+          python3 -m pipeline.run audit --area uk --probes "$PROBES" --rate 80 --concurrency 40
+          cat audit.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit
+          path: |
+            audit.md
+            audit.json
+          retention-days: 90

@@ -68,7 +68,18 @@ Leeds trial (2026-10-21, forced with `--max-age-days 0` on the same day as the f
 - 5% of cells were flagged as changed, all of them false alarms from nearest-panorama noise;
 - re-sampling them reproduced the original map exactly (100% match).
 
-**Limitation:** a new capture that skips a cell's sentinel road isn't detected until a later refresh or a full re-sample.
+**Limitation:** a new capture that skips a cell's sentinel road isn't detected until a full re-sample. Sentinels are
+chosen the same way every month, so a cell keeps checking the same road: a side street re-driven without its cell's
+main road, or a road that had no imagery (sentinels prefer roads that have some), can stay out of date until the
+yearly full rebuild.
+
+**Measuring it:** the **Audit refresh** workflow (Actions tab, manual only, about 30 minutes) runs
+`python3 -m pipeline.run audit --area uk`. It looks up random points along the roads (5,000 per shard by default,
+uniform by length, from a fixed seed) and the sentinels a refresh would check for each road, then reports the share of
+road with newer imagery than the map shows, how much of that a refresh run now would catch or miss, broken down by
+road type, coverage and age, and what the changed sentinels changed to (many refresh re-samples find nothing newer).
+It reads each shard's last result from R2 (`pull-state --pieces-only`) and saves nothing: lookups go to a throwaway
+cache. The report is in the run summary and the `audit` artifact.
 A full re-sample once a year is a cheap safety net, at about 115k free calls for Leeds. Note that plain `sample`
 reuses every cached lookup however old, so a real re-sample needs `--max-age-days` (see *Full rebuild* below).
 

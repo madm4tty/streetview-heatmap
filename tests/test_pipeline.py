@@ -9,12 +9,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pipeline import areas, measure, overview, publish, run, shards, toplists
+from pipeline import areas, audit, measure, overview, publish, run, shards, toplists
 from pipeline.cache import Lookup, MetadataCache, make_key
 from pipeline.export import (agreement_by_length, month_index, piece_panos, piece_properties,
-                             updates_since, write_geojsonseq)
+                             save_pieces, updates_since, write_geojsonseq)
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
-from pipeline.refresh import refresh
+from pipeline.refresh import plan as refresh_plan, refresh
 from pipeline.roads import Segment, include_way, is_private
 from pipeline.sampler import (PATH_RADIUS_M, ROAD_RADIUS_M, Piece, key_at, merge_pieces,
                               min_bisect_lookups, radius_for, sample_bisect, sample_dense)
@@ -803,6 +803,123 @@ class TestTopTens:
         assert entry["lists"]["oldest"][0] == {"id": "name:Mill Lane|" + entry["lists"]["oldest"][0]["id"].split("|")[1],
                                               "name": "Mill Lane", "km": 0.3, "m": month_index("2008-06")}
         assert "line" not in json.dumps(entry)
+
+
+class TestAudit:
+    # Side Street runs 450 m north of Main Road, in cells of its own
+    SIDE_LAT = 53.804
+
+    def _roads(self, side_lat=SIDE_LAT):
+        main = Segment(id="main", highway="primary", name="Main Road", coords=[START, END])
+        side = Segment(id="side", highway="residential", name="Side Street",
+                       coords=[(side_lat, -1.55), (side_lat, -1.535)])
+        pieces = [Piece("main", 0, main.length, "2015-01"), Piece("side", 0, side.length, "2012-06")]
+        return [main, side], pieces
+
+    def _run(self, resolver, probes=200, side_lat=SIDE_LAT):
+        segs, pieces = self._roads(side_lat)
+        return asyncio.run(audit.audit(segs, pieces, resolver, probes=probes, seed=7,
+                                       now_index=month_index("2026-10")))
+
+    def test_new_imagery_away_from_the_sentinel_is_missed(self):
+        segs, pieces = self._roads()
+        sentinel_keys = {s.key for s in refresh_plan(segs, pieces).sentinels.values()}
+
+        async def resolve(keys):
+            # Google re-drove Side Street, but its sentinel point still gives the old date
+            return {k: "2026-05" if k[0] > 53_801_000 and k not in sentinel_keys
+                    else ("2012-06" if k[0] > 53_801_000 else "2015-01") for k in keys}
+
+        result = self._run(resolve)
+        assert result.probes == 200 and result.outcomes["newer, caught"] == 0
+        missed = result.outcomes["newer, missed"]
+        assert missed == result.by_group["minor road"]["newer, missed"] > 50
+        assert result.outcomes["same"] == result.by_group["major road"]["same"] == 200 - missed
+        assert result.by_age["over 10 years"]["newer, missed"] == missed
+        assert not result.sentinel_changes
+
+    def test_new_imagery_at_the_sentinel_is_caught(self):
+        async def resolve(keys):
+            return {k: "2026-05" if k[0] > 53_801_000 else "2015-01" for k in keys}
+
+        result = self._run(resolve)
+        assert result.outcomes["newer, caught"] > 50 and result.outcomes["newer, missed"] == 0
+        assert result.sentinel_changes == {"newer date": 1}
+
+    def test_side_street_sharing_a_cell_with_a_main_road_is_missed(self):
+        # 200 m apart, so one cell's sentinel goes to the main road; Google
+        # re-drives only the side street, and the refresh never looks at it
+        async def resolve(keys):
+            return {k: "2026-05" if k[0] > 53_801_000 else "2015-01" for k in keys}
+
+        result = self._run(resolve, side_lat=53.8018)
+        assert result.outcomes["newer, missed"] > 50 and result.outcomes["newer, caught"] == 0
+
+    def test_same_seed_same_points(self):
+        seen = []
+
+        async def resolve(keys):
+            seen.append(sorted(keys))
+            return {k: "2015-01" for k in keys}
+
+        self._run(resolve, probes=20)
+        self._run(resolve, probes=20)
+        assert seen[0] == seen[1]
+
+    def test_command_writes_reports_and_leaves_state_alone(self, tmp_path, monkeypatch):
+        segs, pieces = self._roads()
+        monkeypatch.setattr(run, "DATA_DIR", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+        save_pieces(pieces, run.pieces_path("uk-1", "bisect"))
+        save_pieces(pieces, run.pieces_path("uk-2", "bisect"))
+        monkeypatch.setattr(areas, "AREAS", {**areas.AREAS, "uk": {"shards": ["uk-1", "uk-2"]}})
+        monkeypatch.setattr(run, "load_area_segments", lambda area: segs)
+        monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test")
+
+        class FakeClient:
+            def __init__(self, key, cache, **kwargs):
+                self.cache, self.api_calls = cache, 0
+
+            async def lookup_many(self, keys):
+                self.api_calls += len(keys)
+                return {k: Lookup("OK", "p", "2026-05" if k[0] > 53_801_000 else "2015-01",
+                                  copyright="© Google") for k in keys}
+
+        monkeypatch.setattr(run, "StreetViewClient", FakeClient)
+        run.main(["audit", "--area", "uk", "--probes", "50"])
+        report = json.loads((tmp_path / "audit.json").read_text())
+        assert report["total"]["probes"] == 100 and set(report["areas"]) == {"uk-1", "uk-2"}
+        assert "Refresh audit: uk" in (tmp_path / "audit.md").read_text()
+        assert not (tmp_path / "audit.cache.sqlite").exists()
+        assert not (tmp_path / "uk-1.cache.sqlite").exists()   # the pipeline's cache is never opened
+
+    def test_pull_state_pieces_only(self, tmp_path, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(run, "DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(publish, "r2_client", lambda bucket: None)
+        monkeypatch.setattr(publish, "pull_state", lambda c, b, paths, force=False: seen.setdefault("p", paths))
+        run.main(["pull-state", "--area", "uk-3", "--pieces-only"])
+        assert [os.path.basename(p) for p in seen["p"]] == ["uk-3-bisect.pieces.jsonl"]
+
+    def test_comparisons(self):
+        assert audit.compare("2015-01", "2015-01") == "same"
+        assert audit.compare("2015-01", "2020-03") == "newer"
+        assert audit.compare(NO_COVERAGE, "2020-03") == "newer"
+        assert audit.compare("2020-03", "2015-01") == "other"
+        assert audit.compare("2020-03", NON_GOOGLE) == "other"
+        assert audit.sentinel_change("2020-03", NON_GOOGLE) == "dated → user photos"
+        assert audit.sentinel_change(NO_COVERAGE, "2020-03") == "no imagery → dated"
+        assert audit.sentinel_change("2020-03", "2019-01") == "older date"
+
+    def test_report_and_totals(self):
+        async def resolve(keys):
+            return {k: "2026-05" if k[0] > 53_801_000 else "2015-01" for k in keys}
+
+        total = self._run(resolve).add(self._run(resolve))
+        assert total.probes == 400
+        md = audit.report_markdown(total)
+        assert "Newer imagery than the map shows" in md and "| minor road |" in md
+        json.dumps(total.to_json())
 
 
 class TestFullRebuild:

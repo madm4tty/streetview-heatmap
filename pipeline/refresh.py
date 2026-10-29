@@ -97,18 +97,17 @@ def choose_sentinels(segments: Dict[str, Segment], pieces: List[Piece],
     return {cell: sentinel for cell, (_, sentinel) in best.items()}
 
 
-async def refresh(segments: List[Segment], old_pieces: List[Piece],
-                  resolve_fresh: Resolver, cell_m: float = 250.0,
-                  max_span: float = 400.0, min_span: float = 30.0) -> RefreshResult:
-    """Update the previous run's pieces using sentinel checks.
+@dataclass
+class Plan:
+    """What a refresh checks: one sentinel per cell, from the pieces it keeps."""
+    by_id: Dict[str, Segment]
+    size: Tuple[float, float]
+    new_or_reshaped: Set[str]
+    kept_pieces: List[Piece]
+    sentinels: Dict[Cell, Sentinel]
 
-    Args:
-        segments: Road segments from the current OSM extract
-        old_pieces: Pieces saved by the previous sample or refresh run
-        resolve_fresh: Resolver that ignores cache entries from before this
-            refresh started
-        cell_m: Sentinel grid cell size in metres
-    """
+
+def plan(segments: List[Segment], old_pieces: List[Piece], cell_m: float = 250.0) -> Plan:
     by_id = {s.id: s for s in segments}
     size = cell_size_deg(cell_m, segments[0].coords[0][0]) if segments else (1, 1)
 
@@ -126,7 +125,24 @@ async def refresh(segments: List[Segment], old_pieces: List[Piece],
 
     kept_pieces = [p for seg_id, ps in old_by_seg.items()
                    if seg_id not in new_or_reshaped for p in ps]
-    sentinels = choose_sentinels(by_id, kept_pieces, size)
+    return Plan(by_id, size, new_or_reshaped, kept_pieces, choose_sentinels(by_id, kept_pieces, size))
+
+
+async def refresh(segments: List[Segment], old_pieces: List[Piece],
+                  resolve_fresh: Resolver, cell_m: float = 250.0,
+                  max_span: float = 400.0, min_span: float = 30.0) -> RefreshResult:
+    """Update the previous run's pieces using sentinel checks.
+
+    Args:
+        segments: Road segments from the current OSM extract
+        old_pieces: Pieces saved by the previous sample or refresh run
+        resolve_fresh: Resolver that ignores cache entries from before this
+            refresh started
+        cell_m: Sentinel grid cell size in metres
+    """
+    checks = plan(segments, old_pieces, cell_m)
+    by_id, size, new_or_reshaped = checks.by_id, checks.size, checks.new_or_reshaped
+    kept_pieces, sentinels = checks.kept_pieces, checks.sentinels
     fresh = await resolve_fresh([s.key for s in sentinels.values()])
     changed = {cell for cell, s in sentinels.items() if fresh[s.key] != s.old_value}
 

@@ -24,6 +24,7 @@ python3 -m pipeline.run publish-page --area uk          # upload only the page (
 python3 -m pipeline.run pull-state / push-state --area leeds
 python3 -m pipeline.run measure  --pbf <extract>         # size up an extract, no API calls
 python3 -m pipeline.run overview --area uk              # merge shard hexagon tallies into the overview
+python3 -m pipeline.run audit    --area uk              # how much new imagery would a refresh miss? (read-only)
 # UK: areas uk-1 … uk-10 are sampled and tiled separately, merged with tile-join, published as --area uk
 ```
 
@@ -38,6 +39,7 @@ python3 -m pipeline.run overview --area uk              # merge shard hexagon ta
 - `pipeline/streetview.py`: async metadata client, rate limiter, `classify` (only `© Google` is dated)
 - `pipeline/cache.py`: SQLite lookup cache keyed on integer micro-degrees
 - `pipeline/refresh.py`: monthly refresh via one sentinel per 250 m cell
+- `pipeline/audit.py`: random-point audit of the refresh (Audit refresh workflow, manual only)
 - `pipeline/export.py`: GeoJSONSeq and tippecanoe
 - `pipeline/overview.py`: H3 hexagon tallies per area, merged into the overview the page shows at low zoom
 - `pipeline/toplists.py`: the page's top tens (oldest roads waiting, biggest leaps, most updated, newly covered,
@@ -73,6 +75,9 @@ python3 -m pipeline.run overview --area uk              # merge shard hexagon ta
   checking it from scripts.
 - Decided: the classic green-to-red palette stays the default, with the Okabe–Ito colour-blind safe palette as an
   opt-in toggle (owner's choice, 2026-10-24, although the classic palette fails the palette checks).
+- Open question: sentinels are chosen the same way every month, so a refresh can keep missing new imagery on roads
+  that aren't their cell's sentinel. The Audit refresh workflow measures how much; if it's more than about 1–2% of
+  road, the proposed fix is a second, rotating sentinel per cell weighted towards old or uncovered roads.
 - Open decision: what to do about path imagery (Google Trekker imagery is also "© Google", so parks can show dated
   imagery even though the aim is car imagery only).
 - Not built yet: a council league table (ONS boundaries; owner unsure it's worth it). The "new imagery" highlight
