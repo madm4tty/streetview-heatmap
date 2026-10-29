@@ -76,8 +76,10 @@ python3 -m pipeline.run audit    --area uk              # how much new imagery w
 - Decided: the classic green-to-red palette stays the default, with the Okabe–Ito colour-blind safe palette as an
   opt-in toggle (owner's choice, 2026-10-24, although the classic palette fails the palette checks).
 - Open question: sentinels are chosen the same way every month, so a refresh can keep missing new imagery on roads
-  that aren't their cell's sentinel. The Audit refresh workflow measures how much; if it's more than about 1–2% of
-  road, the proposed fix is a second, rotating sentinel per cell weighted towards old or uncovered roads.
+  that aren't their cell's sentinel. Sentinels are now compared with their own previous lookup (cutting the false
+  alarms that re-sampled ~5,600 cells per shard a month). The Audit refresh workflow measures misses: run a baseline
+  before a build and compare straight after. If the refresh misses more than about 1–2% of road, the proposed fix is
+  a second, rotating sentinel per cell weighted towards old or uncovered roads.
 - Open decision: what to do about path imagery (Google Trekker imagery is also "© Google", so parks can show dated
   imagery even though the aim is car imagery only).
 - Not built yet: a council league table (ONS boundaries; owner unsure it's worth it). The "new imagery" highlight

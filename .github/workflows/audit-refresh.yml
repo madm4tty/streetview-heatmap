@@ -1,17 +1,33 @@
 name: Audit refresh
 
-# Manual only. Checks random points along the roads against each shard's last
-# saved result, and the sentinels a refresh would check for them, to measure how
-# much new imagery the monthly refresh misses (see pipeline/audit.py). Reads the
-# results from R2 but saves and publishes nothing. About 30 minutes; the report
-# is in the run summary and the audit artifact.
+# Manual only. Measures how much new imagery the monthly refresh misses (see
+# pipeline/audit.py), in two steps:
+#   baseline  random points along the roads, checked against each shard's last
+#             result and the sentinels a refresh would check; the points are
+#             kept in the state bucket. Run it a few days before a build.
+#   compare   the baseline's points looked up again. Run it straight after the
+#             next build: what's newer than at the baseline is new imagery,
+#             and the map either has it or the refresh missed it.
+# Publishes nothing and never touches the pipeline's cache or results. The
+# report is in the run summary and the audit artifact. At the default rate a
+# baseline takes about 1 h 45 min; 300/s is about four times faster, but only
+# while no build is running.
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: baseline (new random points, kept for later) or compare (the kept points again)
+        type: choice
+        options: [baseline, compare]
+        default: baseline
       probes:
-        description: Random points per shard (there are 10)
+        description: "Baseline only: random points per shard (there are 10)"
         type: number
         default: 5000
+      rate:
+        description: Lookups per second (80 is safe alongside a build; up to 300 when none is running)
+        type: number
+        default: 80
 
 # Its own group: sharing the build's would let a queued audit cancel a queued
 # monthly build. The low rate keeps the two under Google's 500 requests/s if
@@ -58,9 +74,12 @@ jobs:
 
       - name: Audit
         env:
+          MODE: ${{ inputs.mode }}
           PROBES: ${{ inputs.probes }}
+          RATE: ${{ inputs.rate }}
         run: |
-          python3 -m pipeline.run audit --area uk --probes "$PROBES" --rate 80 --concurrency 40
+          if [ "$MODE" = "compare" ]; then FLAG=--compare; else FLAG=--save-baseline; fi
+          python3 -m pipeline.run audit --area uk $FLAG --probes "$PROBES" --rate "$RATE" --concurrency 100
           cat audit.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4

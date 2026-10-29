@@ -6,7 +6,12 @@ imagery. A refresh instead:
 1. Divides the area into ~250 m grid cells and picks one sentinel per cell:
    the middle of the longest stretch of the most important road there,
    preferring roads that already have Google imagery (cars drive main roads).
-2. Looks up every sentinel fresh, ignoring the cache.
+2. Looks up every sentinel fresh, ignoring the cache, and compares it with
+   the previous lookup at the same point (sentinels land on the same point
+   each month while their road is unchanged), or else with the stretch's
+   date. The stretch was dated from lookups at its ends, so a point in its
+   middle can differ without anything having changed; comparing with that
+   re-sampled thousands of cells a month for nothing.
 3. Re-samples (fresh, bisection) every road touching a cell whose sentinel
    changed value, plus roads that are new or reshaped in the OSM extract.
 4. Keeps the previous pieces for everything else.
@@ -19,7 +24,7 @@ is not detected until a later refresh or a full re-sample.
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from pipeline.cache import Key
 from pipeline.geo import point_at
@@ -56,6 +61,8 @@ class RefreshResult:
     changed_cells: Set[Cell] = field(default_factory=set)
     resampled: int = 0
     new_or_reshaped: int = 0
+    # Sentinels compared with their own previous lookup, not their stretch's date
+    with_previous: int = 0
 
 
 def cell_size_deg(cell_m: float, lat: float) -> Tuple[float, float]:
@@ -130,7 +137,8 @@ def plan(segments: List[Segment], old_pieces: List[Piece], cell_m: float = 250.0
 
 async def refresh(segments: List[Segment], old_pieces: List[Piece],
                   resolve_fresh: Resolver, cell_m: float = 250.0,
-                  max_span: float = 400.0, min_span: float = 30.0) -> RefreshResult:
+                  max_span: float = 400.0, min_span: float = 30.0,
+                  previous: Optional[Callable[[List[Key]], Dict[Key, str]]] = None) -> RefreshResult:
     """Update the previous run's pieces using sentinel checks.
 
     Args:
@@ -139,12 +147,17 @@ async def refresh(segments: List[Segment], old_pieces: List[Piece],
         resolve_fresh: Resolver that ignores cache entries from before this
             refresh started
         cell_m: Sentinel grid cell size in metres
+        previous: Gives an earlier run's answer for the keys that have one
+            (not this refresh's, so a resumed refresh still sees changes)
     """
     checks = plan(segments, old_pieces, cell_m)
     by_id, size, new_or_reshaped = checks.by_id, checks.size, checks.new_or_reshaped
     kept_pieces, sentinels = checks.kept_pieces, checks.sentinels
-    fresh = await resolve_fresh([s.key for s in sentinels.values()])
-    changed = {cell for cell, s in sentinels.items() if fresh[s.key] != s.old_value}
+    keys = [s.key for s in sentinels.values()]
+    # Read before looking up, since a fresh lookup replaces the cached answer
+    before = previous(keys) if previous else {}
+    fresh = await resolve_fresh(keys)
+    changed = {cell for cell, s in sentinels.items() if fresh[s.key] != before.get(s.key, s.old_value)}
 
     to_resample = set(new_or_reshaped)
     if changed:
@@ -157,4 +170,5 @@ async def refresh(segments: List[Segment], old_pieces: List[Piece],
                                  key=lambda p: (p.segment_id, p.start_m)))
 
     return RefreshResult(pieces=pieces, sentinels=len(sentinels), changed_cells=changed,
-                         resampled=len(to_resample), new_or_reshaped=len(new_or_reshaped))
+                         resampled=len(to_resample), new_or_reshaped=len(new_or_reshaped),
+                         with_previous=len(before))

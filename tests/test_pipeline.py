@@ -11,7 +11,7 @@ import pytest
 
 from pipeline import areas, audit, measure, overview, publish, run, shards, toplists
 from pipeline.cache import Lookup, MetadataCache, make_key
-from pipeline.export import (agreement_by_length, month_index, piece_panos, piece_properties,
+from pipeline.export import (agreement_by_length, month_index, load_pieces, piece_panos, piece_properties,
                              save_pieces, updates_since, write_geojsonseq)
 from pipeline.geo import cumulative_lengths, haversine_m, point_at, sub_line
 from pipeline.refresh import plan as refresh_plan, refresh
@@ -252,6 +252,66 @@ class TestRefresh:
         cache.put_many([(key, Lookup("ZERO_RESULTS"))])
         assert cache.get_many([key], fresh_after="2000-01-01 00:00:00") != {}
         assert cache.get_many([key], fresh_after="2999-01-01 00:00:00") == {}
+
+    def test_cache_gives_earlier_runs_answers(self, tmp_path):
+        cache = MetadataCache(str(tmp_path / "c.sqlite"))
+        key = make_key(53.8, -1.55, 25)
+        cache.put_many([(key, Lookup("ZERO_RESULTS"))])
+        assert cache.get_many([key], fetched_before="2999-01-01 00:00:00") != {}
+        assert cache.get_many([key], fetched_before="2000-01-01 00:00:00") == {}
+
+    def test_sentinel_compared_with_its_previous_lookup_not_its_stretch(self):
+        # The map dates road A 2019-08 from its ends, but at the sentinel (its
+        # middle) Google has always said 2021-03: nothing has changed there
+        segments = [_road("a", self.ROAD_A), _road("b", self.ROAD_B)]
+        old = self._previous_run(segments)
+        resolve, calls = _fixed_resolver(lambda lat: "2021-03" if lat < 53.805 else "2019-08")
+        earlier = lambda keys: {k: "2021-03" for k in keys if k[0] < 53_805_000}
+        result = asyncio.run(refresh(segments, old, resolve, previous=earlier))
+        assert result.changed_cells == set() and result.resampled == 0
+        assert result.with_previous == 1                 # road B had no earlier lookup
+        # Without the earlier lookup, road A looks changed and is re-sampled for nothing
+        result = asyncio.run(refresh(segments, old, resolve))
+        assert result.resampled == 1 and result.with_previous == 0
+
+    def test_refresh_command_asks_again_and_compares_with_last_weeks_answer(self, tmp_path, monkeypatch):
+        segments = [_road("a", self.ROAD_A), _road("b", self.ROAD_B)]
+        old = self._previous_run(segments)
+        monkeypatch.setattr(run, "DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(run, "load_area_segments", lambda area: segments)
+        monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test")
+        save_pieces(old, run.pieces_path("uk-1", "bisect"))
+        # Last week's refresh looked up the sentinels: Google said 2021-03 in road A's middle
+        sentinels = refresh_plan(segments, old).sentinels.values()
+        cache = MetadataCache(run.cache_path("uk-1"))
+        cache.put_many([(s.key, Lookup("OK", "p", "2021-03" if s.segment_id == "a" else "2019-08",
+                                       copyright="© Google")) for s in sentinels])
+        cache.conn.execute("UPDATE lookups SET fetched_at = datetime('now', '-7 days')")
+        cache.conn.commit()
+        cache.close()
+        from_cache = []
+
+        async def lookup(self, keys, fresh_after=None):
+            found = self.cache.get_many(keys, fresh_after=fresh_after)
+            from_cache.extend(found)
+            return {k: found.get(k, Lookup("OK", "p", "2021-03" if k[0] < 53_805_000 else "2019-08",
+                                            copyright="© Google")) for k in keys}
+
+        monkeypatch.setattr(run.StreetViewClient, "lookup_many", lookup)
+        run.main(["refresh", "--area", "uk-1"])
+        assert not {s.key for s in sentinels} & set(from_cache)   # a week old: asked again
+        # Same answers as last week at the sentinels, so nothing is re-sampled,
+        # though road A's middle differs from its stretch's date
+        assert load_pieces(run.pieces_path("uk-1", "bisect")) == old
+
+    def test_real_change_at_a_sentinel_still_resamples(self):
+        segments = [_road("a", self.ROAD_A), _road("b", self.ROAD_B)]
+        old = self._previous_run(segments)
+        resolve, _ = _fixed_resolver(lambda lat: "2026-09" if lat < 53.805 else "2019-08")
+        earlier = lambda keys: {k: "2021-03" if k[0] < 53_805_000 else "2019-08" for k in keys}
+        result = asyncio.run(refresh(segments, old, resolve, previous=earlier))
+        assert {p.segment_id: p.value for p in result.pieces} == {"a": "2026-09", "b": "2019-08"}
+        assert result.resampled == 1
 
 
 class FakeR2:
@@ -892,6 +952,73 @@ class TestAudit:
         assert "Refresh audit: uk" in (tmp_path / "audit.md").read_text()
         assert not (tmp_path / "audit.cache.sqlite").exists()
         assert not (tmp_path / "uk-1.cache.sqlite").exists()   # the pipeline's cache is never opened
+
+    def test_recheck_counts_only_what_is_new_since_the_baseline(self):
+        segs, pieces = self._roads()
+        main, side = segs
+        def point(seg, dist, mapped, google):
+            return {"seg": seg.id, "dist": dist, "length": round(seg.length, 1),
+                    "key": list(key_at(seg, dist)), "map": mapped, "google": google}
+        points = [
+            point(main, 100, "2015-01", "2019-03"),   # differed from the map then; unchanged now
+            point(main, 500, "2015-01", "2015-01"),   # new imagery, and the refresh put it on the map
+            point(side, 300, "2012-06", "2012-06"),   # new imagery the refresh missed
+            point(side, 700, "2012-06", "2012-06"),   # Google now gives an older panorama: noise
+            {**point(side, 200, "2012-06", "2012-06"), "length": 123.0},   # road reshaped since
+        ]
+        now_pieces = [Piece("main", 0, 300, "2015-01"), Piece("main", 300, main.length, "2026-05"),
+                      Piece("side", 0, side.length, "2012-06")]
+        answers = {tuple(points[0]["key"]): "2019-03", tuple(points[1]["key"]): "2026-05",
+                   tuple(points[2]["key"]): "2026-07", tuple(points[3]["key"]): "2010-01"}
+
+        async def resolve(keys):
+            return {k: answers[k] for k in keys}
+
+        result = asyncio.run(audit.recheck(points, segs, now_pieces, resolve))
+        assert result.points == 4 and result.skipped == 1 and result.unstable == 1
+        assert result.outcomes == {"no new imagery": 2, "new, on the map": 1, "new, missed": 1}
+        assert result.tables["by_year"]["2026"] == {"new, on the map": 1, "new, missed": 1}
+        md = audit.recheck_markdown(result, "Recheck")
+        assert "missed by the refresh: 25.0%" in md and "| 2026 | 2 | 1 |" in md
+
+    def test_baseline_then_compare_through_the_state_bucket(self, tmp_path, monkeypatch):
+        segs, pieces = self._roads()
+        monkeypatch.setattr(run, "DATA_DIR", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+        for shard in ("uk-1", "uk-2"):
+            save_pieces(pieces, run.pieces_path(shard, "bisect"))
+        monkeypatch.setattr(areas, "AREAS", {**areas.AREAS, "uk": {"shards": ["uk-1", "uk-2"]}})
+        monkeypatch.setattr(run, "load_area_segments", lambda area: segs)
+        monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test")
+        r2 = FakeR2()
+        monkeypatch.setattr(publish, "r2_client", lambda bucket: r2)
+        date = {"value": "2015-01"}
+
+        class FakeClient:
+            def __init__(self, key, cache, **kwargs):
+                self.cache, self.api_calls = cache, 0
+
+            async def lookup_many(self, keys):
+                return {k: Lookup("OK", "p", date["value"], copyright="© Google") for k in keys}
+
+        monkeypatch.setattr(run, "StreetViewClient", FakeClient)
+        run.main(["audit", "--area", "uk", "--probes", "30", "--save-baseline"])
+        assert "audit-baseline.json.gz" in r2.objects
+        os.remove(run.audit_baseline_path())           # as on a fresh machine: fetched from R2
+
+        date["value"] = "2026-05"                      # Google re-drove everything; the map didn't change
+        run.main(["audit", "--area", "uk", "--compare", "--out", "after"])
+        report = json.loads((tmp_path / "after.json").read_text())
+        assert report["total"]["points"] == 60 and report["total"]["outcomes"] == {"new, missed": 60}
+        assert "against the baseline of" in (tmp_path / "after.md").read_text()
+
+    def test_compare_without_a_baseline_says_so(self, tmp_path, monkeypatch):
+        segs, pieces = self._roads()
+        monkeypatch.setattr(run, "DATA_DIR", str(tmp_path))
+        save_pieces(pieces, run.pieces_path("uk-1", "bisect"))
+        monkeypatch.setattr(publish, "r2_client", lambda bucket: FakeR2())
+        with pytest.raises(SystemExit, match="No audit baseline"):
+            run.main(["audit", "--area", "uk-1", "--compare"])
 
     def test_pull_state_pieces_only(self, tmp_path, monkeypatch):
         seen = {}
