@@ -58,9 +58,13 @@ The cache keeps lookups forever, so rerunning `sample` never picks up new imager
 How it works:
 1. It splits the area into 250 m grid cells.
 2. In each cell it re-checks one "sentinel" point: the middle of the longest stretch of the most important road there, preferring roads that already have Google imagery.
+   It compares the answer with the previous lookup at that same point (from the cache; sentinels land on the same point each month while their road is unchanged), or, if there isn't one, with the stretch's date.
 3. Every road touching a cell whose sentinel changed is re-sampled. So are roads that are new or reshaped in OSM. Everything else keeps its previous dates.
 
-Lookups newer than `--max-age-days` (default 25) count as fresh, so a rerun in the same month resumes rather than starting again.
+Lookups newer than `--max-age-days` (default 2) count as fresh, so rerunning an interrupted refresh the same or next
+day resumes rather than starting again. Older ones are asked again, so a refresh only days after another (an extra
+manual build) still sees what changed in between. Until 2026-10-29 this was 25 days, which suited the monthly
+schedule but meant a build within 25 of the last one reused its sentinel answers and could not see anything new.
 The previous result is kept as `<area>-bisect.prev.pieces.jsonl`.
 
 Leeds trial (2026-10-21, forced with `--max-age-days 0` on the same day as the full run):
@@ -68,18 +72,40 @@ Leeds trial (2026-10-21, forced with `--max-age-days 0` on the same day as the f
 - 5% of cells were flagged as changed, all of them false alarms from nearest-panorama noise;
 - re-sampling them reproduced the original map exactly (100% match).
 
+Those false alarms came from comparing a sentinel with its stretch's date: the stretch was dated from lookups at its
+ends, so a point in its middle can give another panorama with no change at all. UK refreshes re-sampled about 5,600
+cells per shard each month this way while finding new imagery on a few dozen pieces, and the audit (below) found 60%
+of sentinel "changes" were to no imagery or an older date. Since 2026-10-29 a sentinel is compared with its own
+previous lookup, so only a real change at that point re-samples its cells. A refresh resumed in the same month
+ignores lookups it made itself and falls back to the stretch's date. The refresh logs how many sentinels had an
+earlier lookup to compare with.
+
 **Limitation:** a new capture that skips a cell's sentinel road isn't detected until a full re-sample. Sentinels are
 chosen the same way every month, so a cell keeps checking the same road: a side street re-driven without its cell's
 main road, or a road that had no imagery (sentinels prefer roads that have some), can stay out of date until the
 yearly full rebuild.
 
-**Measuring it:** the **Audit refresh** workflow (Actions tab, manual only, about 30 minutes) runs
-`python3 -m pipeline.run audit --area uk`. It looks up random points along the roads (5,000 per shard by default,
-uniform by length, from a fixed seed) and the sentinels a refresh would check for each road, then reports the share of
-road with newer imagery than the map shows, how much of that a refresh run now would catch or miss, broken down by
-road type, coverage and age, and what the changed sentinels changed to (many refresh re-samples find nothing newer).
-It reads each shard's last result from R2 (`pull-state --pieces-only`) and saves nothing: lookups go to a throwaway
-cache. The report is in the run summary and the `audit` artifact.
+**Measuring it:** the **Audit refresh** workflow (Actions tab, manual only) runs `python3 -m pipeline.run audit`, in
+two steps:
+1. **baseline**, a few days before a build: random points along the roads (5,000 per shard by default, uniform by
+   length, from a fixed seed) looked up fresh, with the sentinels a refresh would check for each road. It reports the
+   share of road where Google differs from the map, how much of that a refresh run now would catch, by road type,
+   coverage, age and capture year, and what changed sentinels changed to. The points are kept in the state bucket
+   (`audit-baseline.json.gz`).
+2. **compare**, straight after the build: the same points looked up again. A point whose answer is newer than at
+   the baseline has new imagery, and the map either has it now or the refresh missed it. Differences that were
+   already there at the baseline (the map's own resolution: a stretch is dated from its ends) cancel out, which the
+   baseline alone can't separate from misses. Imagery Google publishes after the build counts as missed, so don't
+   leave a gap.
+
+It reads each shard's last result from R2 (`pull-state --pieces-only`), never touches the pipeline's cache (lookups
+go to a throwaway one) and publishes nothing. The report is in the run summary and the `audit` artifact. At the
+default 80 lookups/s, safe alongside a build, a baseline takes about 1 h 45 min (about 190k lookups) and a compare
+less; up to 300/s is fine when no build is running.
+
+The first baseline (2026-10-29, the old sentinel comparison) found Google newer than the map on 2.2% of road, half of
+it out of a refresh's reach (mostly service roads, paths and roads without imagery), but differences the other way
+(older dates, imagery gone) were just as common, 2.4%: most of it is the map's resolution, not new imagery.
 A full re-sample once a year is a cheap safety net, at about 115k free calls for Leeds. Note that plain `sample`
 reuses every cached lookup however old, so a real re-sample needs `--max-age-days` (see *Full rebuild* below).
 

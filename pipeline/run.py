@@ -197,9 +197,14 @@ def cmd_refresh(args) -> None:
         lookups = await client.lookup_many(keys, fresh_after=cutoff)
         return {k: classify(v) for k, v in lookups.items()}
 
+    def previous(keys: List[Key]) -> Dict[Key, str]:
+        """Each sentinel's answer from an earlier run, to compare like with like."""
+        return {k: classify(v) for k, v in client.cache.get_many(keys, fetched_before=cutoff).items()}
+
     start = time.time()
     try:
-        result = asyncio.run(refresh(segments, old_pieces, resolve_fresh, cell_m=args.cell_m))
+        result = asyncio.run(refresh(segments, old_pieces, resolve_fresh, cell_m=args.cell_m,
+                                     previous=previous if cutoff else None))
     except (FatalAPIError, BudgetExceeded) as exc:
         raise SystemExit(f"Stopped after {client.api_calls:,} API calls: {exc}\n"
                          "Lookups made so far are cached; rerun to resume.")
@@ -209,7 +214,8 @@ def cmd_refresh(args) -> None:
     shutil.copy(path, prev_pieces_path(args.area, "bisect"))
     save_pieces(result.pieces, path)
     print(f"\n{args.area} refresh in {time.time() - start:,.0f}s")
-    print(f"  sentinels checked: {result.sentinels:,} ({args.cell_m:.0f} m cells); "
+    print(f"  sentinels checked: {result.sentinels:,} ({args.cell_m:.0f} m cells), "
+          f"{result.with_previous:,} against an earlier lookup at the same point; "
           f"changed: {len(result.changed_cells):,}")
     print(f"  segments re-sampled: {result.resampled:,} "
           f"(of which new or reshaped in OSM: {result.new_or_reshaped:,})")
@@ -220,13 +226,30 @@ def cmd_refresh(args) -> None:
     print(f"Next: python3 -m pipeline.run tiles --area {args.area}")
 
 
+def audit_baseline_path() -> str:
+    return os.path.join(DATA_DIR, "audit-baseline.json")
+
+
 def cmd_audit(args) -> None:
-    """Probe random points against the saved result; nothing is saved but the report."""
+    """Probe random points against the saved result, or re-check a baseline's points.
+
+    Saves nothing but the report, and with --save-baseline the points, to the
+    state bucket, for a later --compare.
+    """
     parts = areas.get_area(args.area).get("shards", [args.area])
     missing = [pieces_path(a, "bisect") for a in parts if not os.path.exists(pieces_path(a, "bisect"))]
     if missing:
         raise SystemExit(f"Missing {', '.join(missing)}. Run: python3 -m pipeline.run pull-state "
                          f"--pieces-only --area <area> for each.")
+    baseline = None
+    if args.compare:
+        if not os.path.exists(audit_baseline_path()):
+            bucket = publish.state_bucket()
+            publish.pull_state(publish.r2_client(bucket), bucket, [audit_baseline_path()])
+        if not os.path.exists(audit_baseline_path()):
+            raise SystemExit("No audit baseline yet: run the audit with --save-baseline first.")
+        with open(audit_baseline_path()) as f:
+            baseline = json.load(f)
     # A throwaway cache: every lookup is fresh, and the pipeline's own cache is untouched
     scratch = os.path.join(DATA_DIR, "audit.cache.sqlite")
     if os.path.exists(scratch):
@@ -238,14 +261,20 @@ def cmd_audit(args) -> None:
         return {k: classify(v) for k, v in (await client.lookup_many(keys)).items()}
 
     now = datetime.now(timezone.utc)
-    total, per_area = audit.AuditResult(), {}
+    total = audit.RecheckResult() if baseline else audit.AuditResult()
+    per_area = {}
     try:
         for i, area in enumerate(parts):
-            result = asyncio.run(audit.audit(
-                load_area_segments(area), load_pieces(pieces_path(area, "bisect")), resolve_fresh,
-                probes=args.probes, seed=args.seed + i, cell_m=args.cell_m,
-                now_index=now.year * 12 + now.month - 1))
-            per_area[area] = result.to_json()
+            segments, pieces = load_area_segments(area), load_pieces(pieces_path(area, "bisect"))
+            if baseline:
+                points = baseline["areas"].get(area, {}).get("points", [])
+                result = asyncio.run(audit.recheck(points, segments, pieces, resolve_fresh))
+                per_area[area] = result.to_json()
+            else:
+                result = asyncio.run(audit.audit(
+                    segments, pieces, resolve_fresh, probes=args.probes, seed=args.seed + i,
+                    cell_m=args.cell_m, now_index=now.year * 12 + now.month - 1))
+                per_area[area] = {**result.to_json(), "points": result.points}
             logger.info("%s: %s", area, dict(result.outcomes))
             total.add(result)
     except (FatalAPIError, BudgetExceeded) as exc:
@@ -254,14 +283,25 @@ def cmd_audit(args) -> None:
         client.cache.close()
         os.remove(scratch)
 
-    report = audit.report_markdown(total, f"Refresh audit: {args.area}, {now.day} {now:%B %Y}")
+    when = f"{now.day} {now:%B %Y}"
+    if baseline:
+        then = datetime.fromisoformat(baseline["date"])
+        report = audit.recheck_markdown(
+            total, f"Refresh audit: {args.area}, {when}, against the baseline of {then.day} {then:%B %Y}")
+    else:
+        report = audit.report_markdown(total, f"Refresh audit: {args.area}, {when}")
     with open(args.out + ".md", "w", encoding="utf-8") as f:
         f.write(report)
     with open(args.out + ".json", "w") as f:
         json.dump({"area": args.area, "date": now.isoformat(), "total": total.to_json(),
-                   "areas": per_area}, f, indent=1)
+                   "areas": per_area, **({"baseline": baseline["date"]} if baseline else {})}, f)
     print("\n" + report)
     print(f"API calls: {client.api_calls:,}. Wrote {args.out}.md and {args.out}.json")
+    if args.save_baseline and not baseline:
+        shutil.copy(args.out + ".json", audit_baseline_path())
+        bucket = publish.state_bucket()
+        publish.push_state(publish.r2_client(bucket), bucket, [audit_baseline_path()])
+        print(f"Saved the points as the baseline for a later --compare, in the {bucket} bucket")
 
 
 def cmd_compare(args) -> None:
@@ -416,8 +456,10 @@ def main(argv=None) -> None:
         if name == "refresh":
             p.add_argument("--cell-m", type=float, default=250.0,
                            help="Sentinel grid cell size in metres (default 250)")
-            p.add_argument("--max-age-days", type=float, default=25.0,
-                           help="Re-query lookups older than this (default 25)")
+            # Short, so even a refresh soon after another asks Google again, but
+            # a rerun of an interrupted one the same or next day resumes
+            p.add_argument("--max-age-days", type=float, default=2.0,
+                           help="Re-query lookups older than this (default 2)")
         if name == "audit":
             p.add_argument("--probes", type=int, default=5000,
                            help="Random points per area, or per shard for the UK (default 5000)")
@@ -426,6 +468,10 @@ def main(argv=None) -> None:
             p.add_argument("--cell-m", type=float, default=250.0,
                            help="Sentinel grid cell size in metres, as for refresh (default 250)")
             p.add_argument("--out", default="audit", help="Report path without extension (default audit)")
+            p.add_argument("--save-baseline", action="store_true",
+                           help="Keep this run's points in the state bucket for a later --compare")
+            p.add_argument("--compare", action="store_true",
+                           help="Look up the baseline's points again instead of new ones")
         if name in ("sample", "refresh", "audit"):
             p.add_argument("--concurrency", type=int, default=50)
             p.add_argument("--rate", type=float, default=300.0,

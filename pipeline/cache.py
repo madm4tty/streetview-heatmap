@@ -49,24 +49,27 @@ class MetadataCache:
         """)
         self.conn.commit()
 
-    def get_many(self, keys: Iterable[Key],
-                 fresh_after: Optional[str] = None) -> Dict[Key, Lookup]:
+    def get_many(self, keys: Iterable[Key], fresh_after: Optional[str] = None,
+                 fetched_before: Optional[str] = None) -> Dict[Key, Lookup]:
         """Return cached lookups for the keys that have one.
 
         Args:
             keys: Cache keys to look up
             fresh_after: If set ("YYYY-MM-DD HH:MM:SS", UTC), ignore entries
                 fetched before this time so they get looked up again.
+            fetched_before: If set, only entries fetched before this time: an
+                earlier run's answers, not this one's.
         """
         found: Dict[Key, Lookup] = {}
         keys = list(keys)
-        age_filter = "AND fetched_at >= ?" if fresh_after else ""
+        age_filter = ("AND fetched_at >= ?" if fresh_after else
+                      "AND fetched_at < ?" if fetched_before else "")
         for i in range(0, len(keys), 300):  # 3 params each; SQLite limit 999
             batch = keys[i:i + 300]
             placeholders = ",".join(["(?,?,?)"] * len(batch))
             params = [v for key in batch for v in key]
-            if fresh_after:
-                params.append(fresh_after)
+            if fresh_after or fetched_before:
+                params.append(fresh_after or fetched_before)
             rows = self.conn.execute(
                 f"""SELECT lat_e6, lon_e6, radius, status, pano_id, date,
                            pano_lat, pano_lon, copyright
