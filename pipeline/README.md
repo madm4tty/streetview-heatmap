@@ -171,6 +171,13 @@ reuses every cached lookup however old, so a real re-sample needs `--max-age-day
   and each palette's oldest colour is lightened to reach 3:1 against the charcoal: `#c9354f` for the classic palette
   (its other checks no worse) and `#B04A84` for the colour-blind one (colour-blind separation 7, just under the
   target of 8; popups give the date as text).
+- **About**: a guide in a dialog (a full-screen sheet on phones), from "About" in the panel header or a link ending
+  `#about`: what the map shows, how to read it, things to try, how it's made, its limits, and credits. First-time
+  visitors get a one-line welcome with "Show me around" and "Got it", once per device (remembered in localStorage)
+  and never when they arrive on a link to a particular view.
+- **Google Maps button**, below the locate button: opens the same centre and zoom in Google Maps (its zoom levels are
+  one higher than MapLibre's for the same scale). Google's map links can't open satellite, Street View or a date
+  directly; a road's popup has the Street View link.
 - **Place search** with [Photon](https://photon.komoot.io) (free OpenStreetMap geocoder, limited to the UK), and a
   locate-me button.
 - **"Open in Street View"** opens the exact panorama the stretch is dated by: `tiles` looks up each piece's
