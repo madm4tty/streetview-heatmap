@@ -8,8 +8,11 @@ name: Audit refresh
 #   compare   the baseline's points looked up again. Run it straight after the
 #             next build: what's newer than at the baseline is new imagery,
 #             and the map either has it or the refresh missed it.
-# Publishes nothing and never touches the pipeline's cache or results. The
-# report is in the run summary and the audit artifact. At the default rate a
+# Publishes nothing and never touches the pipeline's cache or results. Uses the
+# road extract the last successful build downloaded (kept 3 days), so the
+# points are judged against exactly the roads that build used, and Geofabrik is
+# only asked if that has expired. The report is in the run summary and the
+# audit artifact. At the default rate a
 # baseline takes about 1 h 45 min; 300/s is about four times faster, but only
 # while no build is running.
 on:
@@ -38,6 +41,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read   # to fetch the last build's road extract
 
 jobs:
   audit:
@@ -57,11 +61,41 @@ jobs:
 
       - run: python3 -m pip install -r pipeline/requirements.txt
 
+      # The newest unexpired road extract from a successful build, if any
+      - name: Find the last build's road extract
+        id: extract
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=uk-highways&per_page=10" \
+                         --jq '.artifacts[] | select(.expired == false) | .workflow_run.id'); do
+            if [ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq .conclusion)" = "success" ]; then
+              echo "run_id=$run" >> "$GITHUB_OUTPUT"
+              echo "Using the road extract from build run $run"
+              exit 0
+            fi
+          done
+          echo "No build extract left; downloading from Geofabrik"
+
+      - name: Restore the last build's road extract
+        if: steps.extract.outputs.run_id
+        uses: actions/download-artifact@v4
+        with:
+          name: uk-highways
+          path: pipeline/data
+          run-id: ${{ steps.extract.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      # Fails fast on a stalled transfer (under 100 kB/s for 2 minutes) and retries
       - name: Download the UK extract and keep only highways
+        if: ${{ !steps.extract.outputs.run_id }}
+        timeout-minutes: 40
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
           mkdir -p pipeline/data
-          curl -fsSL -o uk-full.osm.pbf https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf
+          curl -fsSL --connect-timeout 30 --speed-limit 100000 --speed-time 120 \
+            --retry 3 --retry-delay 30 --retry-all-errors \
+            -o uk-full.osm.pbf https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf
           osmium tags-filter uk-full.osm.pbf w/highway -o pipeline/data/united-kingdom-latest.osm.pbf
           rm uk-full.osm.pbf
 
