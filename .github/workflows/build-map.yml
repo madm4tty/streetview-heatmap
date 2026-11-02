@@ -40,7 +40,7 @@ env:
 jobs:
   prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       # GitHub disables scheduled workflows in public repos after 60 days without
       # commits. Re-enabling it on each run keeps the monthly build going.
@@ -49,10 +49,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/build-map.yml/enable"
 
+      # Fails fast on a stalled transfer (under 100 kB/s for 2 minutes) and
+      # retries, rather than hanging until the job's time limit
       - name: Download the UK extract and keep only highways
+        timeout-minutes: 40
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
-          curl -fsSL -o uk-full.osm.pbf https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf
+          curl -fsSL --connect-timeout 30 --speed-limit 100000 --speed-time 120 \
+            --retry 3 --retry-delay 30 --retry-all-errors \
+            -o uk-full.osm.pbf https://download.geofabrik.de/europe/united-kingdom-latest.osm.pbf
           # Keeps highway ways and the nodes they use; the file name is what the pipeline expects
           osmium tags-filter uk-full.osm.pbf w/highway -o united-kingdom-latest.osm.pbf
           ls -lh uk-full.osm.pbf united-kingdom-latest.osm.pbf

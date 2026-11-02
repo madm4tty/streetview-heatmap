@@ -98,8 +98,10 @@ two steps:
    baseline alone can't separate from misses. Imagery Google publishes after the build counts as missed, so don't
    leave a gap.
 
-It reads each shard's last result from R2 (`pull-state --pieces-only`), never touches the pipeline's cache (lookups
-go to a throwaway one) and publishes nothing. The report is in the run summary and the `audit` artifact. At the
+It reads each shard's last result from R2 (`pull-state --pieces-only`), and the road extract the last successful build
+kept as an artifact (3 days), so the points are judged against exactly the roads that build used; only once that has
+expired does it download from Geofabrik. It never touches the pipeline's cache (lookups go to a throwaway one) and
+publishes nothing. The report is in the run summary and the `audit` artifact. At the
 default 80 lookups/s, safe alongside a build, a baseline takes about 1 h 45 min (about 190k lookups) and a compare
 less; up to 300/s is fine when no build is running.
 
