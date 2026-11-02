@@ -1,6 +1,10 @@
 name: Build map
 
-# Monthly UK build, also startable from the Actions tab:
+# Monthly UK build, also startable from the Actions tab. Scheduled daily, but a
+# scheduled run only builds from the 2nd of the month if there's been no
+# successful build since the 2nd; otherwise it stops after a few seconds. So a
+# day GitHub's scheduler skips (as on 2 November 2026) is picked up the next day,
+# and the daily runs show the schedule is alive. Manual runs always build.
 #   prepare  download the UK extract once and cut it down to highways
 #   shard    sample (first run) or refresh each shard in turn, saving state to R2
 #   publish  merge the shard tiles into one UK file, build the hexagon overview
@@ -23,7 +27,7 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "23 4 2 * *"   # 04:23 UTC on the 2nd of each month
+    - cron: "23 4 * * *"   # 04:23 UTC daily; builds once a month (see above)
 
 # Never run two builds at once: both would write the same state files
 concurrency:
@@ -41,6 +45,8 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    outputs:
+      build: ${{ steps.due.outputs.build }}
     steps:
       # GitHub disables scheduled workflows in public repos after 60 days without
       # commits. Re-enabling it on each run keeps the monthly build going.
@@ -49,9 +55,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/build-map.yml/enable"
 
+      - name: Decide whether to build
+        id: due
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "schedule" ]; then
+            echo "Started by hand: building"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          elif [ "$(date -u +%-d)" -lt 2 ]; then
+            echo "Not due until the 2nd"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            since=$(date -u +%Y-%m-02T00:00:00Z)
+            built=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/build-map.yml/runs" \
+                      -f status=success -f created=">=$since" -f per_page=1 --jq .total_count)
+            if [ "$built" -gt 0 ]; then
+              echo "Already built since $since: nothing to do"
+              echo "build=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "No successful build since $since: building"
+              echo "build=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       # Fails fast on a stalled transfer (under 100 kB/s for 2 minutes) and
       # retries, rather than hanging until the job's time limit
       - name: Download the UK extract and keep only highways
+        if: steps.due.outputs.build == 'true'
         timeout-minutes: 40
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
@@ -63,6 +95,7 @@ jobs:
           ls -lh uk-full.osm.pbf united-kingdom-latest.osm.pbf
 
       - uses: actions/upload-artifact@v4
+        if: steps.due.outputs.build == 'true'
         with:
           name: uk-highways
           path: united-kingdom-latest.osm.pbf
@@ -70,6 +103,7 @@ jobs:
 
   shard:
     needs: prepare
+    if: needs.prepare.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 340
     strategy:

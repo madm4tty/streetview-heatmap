@@ -1114,7 +1114,9 @@
   const TOP_LISTS = {
     oldest: { about: "Roads with the oldest Street View still waiting for an update.",
               value: r => shortMonth(r.m), sub: r => `${kmText(r.km)} km` },
-    leaps: { about: "Roads whose imagery jumped furthest forward in this update.",
+    leaps: { about: "Roads whose imagery jumped furthest forward in this update, from the newest date the map had " +
+                    "anywhere on the road. Google's lookup gives the nearest panorama, so newer imagery close by can " +
+                    "be missed and a leap can look bigger than it is.",
              value: r => `${Math.floor(r.fr / 12)} → ${Math.floor(r.to / 12)}`,
              sub: r => `${Math.round((r.to - r.fr) / 12)} years newer · ${kmText(r.km)} km` },
     updated: { about: "Roads with the most new imagery in this update.", value: r => `${kmText(r.km)} km` },
@@ -1257,7 +1259,7 @@
         body = `Captured ${when} (${describeAge(nowMonthIndex - p.m)})`;
         if (p.u !== undefined) {
           body += `<br><strong>New since the last update:</strong> ` +
-            (Number(p.u) > 0 ? `previously ${monthName(Number(p.u))}` : "no Street View before");
+            (Number(p.u) > 0 ? `previously ${monthName(Number(p.u))} on this map` : "no Street View on this map before");
         }
         if (p.pv !== undefined) body += "<br>Private or no public access";
       } else if (p.cov === "none" && p.pv !== undefined) {

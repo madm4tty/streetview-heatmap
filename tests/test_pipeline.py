@@ -841,6 +841,27 @@ class TestTopTens:
         assert [a["km"] for a in merged["areas"]] == [4.0, 0.9]
         assert merged["areas"][0]["id"] and len(merged["areas"][0]["ring"]) == 7
 
+    def test_leap_counts_from_the_newest_date_anywhere_on_the_road(self):
+        # Plane Tree Way: one stretch looked 2008 (the nearest panorama), another
+        # 2022; both are 2026 now. The leap is 2022 to 2026, not 2008 to 2026
+        a, b = self._seg("pt1", 0, name="Plane Tree Way"), self._seg("pt2", 1, name="Plane Tree Way")
+        before = [Piece("pt1", 0, 985, "2008-07"), Piece("pt2", 0, 985, "2022-06")]
+        now = [Piece("pt1", 0, 985, "2026-05"), Piece("pt2", 0, 985, "2026-05")]
+        updates = [month_index("2008-07"), month_index("2022-06")]
+        naive = toplists.shard_lists(now, [a, b], updates)["leaps"]
+        assert (naive[0]["fr"], naive[0]["to"]) == (month_index("2008-07"), month_index("2026-05"))
+        leaps = toplists.shard_lists(now, [a, b], updates, previous=before)["leaps"]
+        assert [(r["name"], r["fr"], r["to"]) for r in leaps] == [
+            ("Plane Tree Way", month_index("2022-06"), month_index("2026-05"))]
+        assert leaps[0]["km"] == pytest.approx(1.97, abs=0.02)   # both stretches, from 2022
+
+    def test_no_leap_if_the_road_already_had_the_new_date(self):
+        a, b = self._seg("x1", 0, name="Mill Lane"), self._seg("x2", 1, name="Mill Lane")
+        before = [Piece("x1", 0, 985, "2010-01"), Piece("x2", 0, 985, "2026-05")]
+        now = [Piece("x1", 0, 985, "2026-05"), Piece("x2", 0, 985, "2026-05")]
+        lists = toplists.shard_lists(now, [a, b], [month_index("2010-01"), None], previous=before)
+        assert lists["leaps"] == [] and lists["updated"][0]["name"] == "Mill Lane"
+
     def test_without_a_previous_result_only_oldest(self):
         segs = [self._seg("mill", 0, name="Mill Lane")]
         lists = toplists.shard_lists([Piece("mill", 0, 985, "2010-01")], segs)

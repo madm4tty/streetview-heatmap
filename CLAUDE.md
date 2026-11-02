@@ -63,23 +63,44 @@ python3 -m pipeline.run audit    --area uk              # how much new imagery w
 - `R2_SITE_PREFIX`: secret folder the site is published under
 - `R2_BUCKET`, `R2_STATE_BUCKET`: optional bucket name overrides
 
-## Current state and open items (October 2026)
+## Current state and open items (November 2026)
 
-- Live: the whole UK, published to R2 by the monthly Build map workflow (2nd of each month, 04:23 UTC). Page-only
+- Live: the whole UK, published to R2 by the monthly Build map workflow (scheduled daily at 04:23 UTC; builds once
+  a month, from the 2nd, if there's been no successful build since the 2nd). Page-only
   changes go live within a minute of reaching `main` via the Deploy page workflow. First full
-  build 2026-10-23 took 14 h (60–104 min of lookups per shard); a refresh takes about 2 h 45 min (7–11 min per shard).
-  Tiles are about 830 MB per version (expect about 1 GB once builds include panorama IDs), the overview 2.9 MB
-  (0.5 MB compressed), R2 total about 2.6 GB of the 10 GB free tier.
+  build 2026-10-23 took 14 h (60–104 min of lookups per shard). A refresh takes about 4 h (18–26 min per shard, of
+  which 11–17 min refresh) since sentinels are really re-asked each build. Tiles are about 1.2 GB per version, the
+  overview 3.0 MB (0.5 MB compressed), R2 total about 3.3 GB of the 10 GB free tier.
+- GitHub's scheduler skipped the 2 November 04:23 build entirely (no run, no incident on githubstatus.com, workflow
+  still enabled); it was started by hand. Hence the daily schedule with a once-a-month guard. If no scheduled runs at
+  all appear in the Actions tab after a few days, the schedule itself isn't firing: one suspect is that the commits
+  adding the cron line were authored as Claude <noreply@anthropic.com>, not a GitHub account; a one-line edit of the
+  schedule by the owner on GitHub would rule that out.
+- Biggest leaps: Google's metadata lookup returns the nearest panorama, not the newest, so an old capture can date a
+  stretch when newer imagery is close by (Plane Tree Way, Woodstock showed 2008 → 2026 though Maps had June 2022).
+  Leaps are now measured from the newest date the previous result had anywhere on the road; the map itself can
+  still show an older date than Maps in such spots.
 - Cloud sessions can't download from Geofabrik (the proxy drops the connection), so real builds run on GitHub
   Actions. The site's Cloudflare zone blocks non-browser user agents (error 1010): send a browser User-Agent when
   checking it from scripts.
 - Decided: the classic green-to-red palette stays the default, with the Okabe–Ito colour-blind safe palette as an
   opt-in toggle (owner's choice, 2026-10-24, although the classic palette fails the palette checks).
-- Open question: sentinels are chosen the same way every month, so a refresh can keep missing new imagery on roads
-  that aren't their cell's sentinel. Sentinels are now compared with their own previous lookup (cutting the false
-  alarms that re-sampled ~5,600 cells per shard a month). The Audit refresh workflow measures misses: run a baseline
-  before a build and compare straight after. If the refresh misses more than about 1–2% of road, the proposed fix is
-  a second, rotating sentinel per cell weighted towards old or uncovered roads.
+- Refresh misses (open question): sentinels are chosen the same way every month, so a refresh can keep missing new
+  imagery on roads that aren't their cell's sentinel. Measured with the Audit refresh workflow (baseline before a
+  build, compare straight after):
+  - Until 2026-10-29 refreshes reused cached sentinel answers under 25 days old and compared sentinels with their
+    stretch's date, so they saw almost nothing new (48 new pieces in uk-1 on 25 Oct) and re-sampled ~5,600 cells per
+    shard for nothing. Fixed in #44: a 2-day reuse window, sentinels compared with their own previous lookup.
+  - The 2 November build (the first with the fix) found new imagery on 72,729 of 9.4M pieces (0.8%), mostly a backlog,
+    and flagged 30,898 changed cells (2.0% of sentinels).
+  - Compare, 29 Oct baseline vs the 2 Nov build (50,000 points, 4 days): new imagery on 0.21% of road; the map got
+    0.14%, the refresh **missed 0.07%** (a third of what was new). Misses were 24–30% of new imagery on dated major
+    and minor roads, but 93% on roads the map showed with no imagery (sentinels prefer covered roads, so first-time
+    coverage is mostly missed and the "Newly covered roads" top ten undercounts). Lookup noise at the same point:
+    0.1%. Small numbers (36 missed points), so treat the shares as rough.
+  - Decision so far: no general rotating sentinel (well under the 1–2% threshold). Next: baseline about 28 November,
+    compare straight after the December build, for a full month's window. If first-time coverage is still mostly
+    missed, consider a targeted extra sentinel in cells with uncovered roads, or a full rebuild every six months.
 - Open decision: what to do about path imagery (Google Trekker imagery is also "© Google", so parks can show dated
   imagery even though the aim is car imagery only).
 - Not built yet: a council league table (ONS boundaries; owner unsure it's worth it). The "new imagery" highlight

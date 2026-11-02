@@ -357,7 +357,8 @@ def cmd_tiles(args) -> None:
     segments = load_area_segments(args.area)
     pieces = load_pieces(pieces_path(args.area, args.mode))
     prev = prev_pieces_path(args.area, args.mode)
-    updates = updates_since(pieces, load_pieces(prev)) if os.path.exists(prev) else None
+    previous = load_pieces(prev) if os.path.exists(prev) else None
+    updates = updates_since(pieces, previous) if previous is not None else None
     if updates is not None:
         logger.info("New imagery on %d of %d pieces since the previous result",
                     sum(1 for u in updates if u is not None), len(pieces))
@@ -371,7 +372,7 @@ def cmd_tiles(args) -> None:
         logger.info("Panorama IDs for %d of %d pieces", sum(1 for x in panos if x), len(pieces))
     # Hexagon tallies and top-ten candidates: merged across shards later for
     # the UK, or straight into this area's overview otherwise
-    toplists.save(toplists.shard_lists(pieces, segments, updates, panos), toplists_path(args.area))
+    toplists.save(toplists.shard_lists(pieces, segments, updates, panos, previous), toplists_path(args.area))
     points = overview.piece_points(pieces, segments)
     if updates is not None:
         points = overview.with_updates(points, updates)
