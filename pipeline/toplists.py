@@ -1,7 +1,9 @@
 """Top-ten lists for the page, all ones that change from build to build.
 
 - oldest:  roads with the oldest imagery still waiting for an update
-- leaps:   roads whose imagery jumped furthest forward this build
+- leaps:   roads whose imagery jumped furthest forward this build, measured
+           from the newest date the previous result had anywhere on the road
+           (see `shard_lists`)
 - updated: roads with the most new imagery this build
 - covered: roads with Street View for the first time this build
 - areas:   areas with the most new imagery this build (from the hexagon tallies)
@@ -15,6 +17,7 @@ comes out whole, give or take where it was cut off) and picks the top ten.
 """
 
 import json
+import logging
 from collections import defaultdict
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -36,6 +39,8 @@ MAX_LINE_POINTS = 60
 ROAD_LISTS = ("oldest", "leaps", "updated", "covered")
 
 Lists = Dict[str, List[Dict]]
+
+logger = logging.getLogger(__name__)
 
 
 def is_listed(seg: Segment) -> bool:
@@ -86,11 +91,34 @@ class _Group:
         return rec
 
 
+def _newest_before(previous: Iterable[Piece], by_id: Dict[str, Segment]) -> Dict[str, int]:
+    """Each road's newest dated month in the previous result."""
+    newest: Dict[str, int] = {}
+    for p in previous:
+        seg = by_id.get(p.segment_id)
+        if seg is None or not is_listed(seg) or p.value in (NO_COVERAGE, NON_GOOGLE):
+            continue
+        lat, lon = point_at(seg.coords, seg.cum, (p.start_m + p.end_m) / 2)
+        ident = road_id(seg, lat, lon)
+        newest[ident] = max(newest.get(ident, 0), month_index(p.value))
+    return newest
+
+
 def shard_lists(pieces: List[Piece], segments: Iterable[Segment],
                 updates: Optional[List[Optional[int]]] = None,
-                panos: Optional[List[Optional[str]]] = None) -> Lists:
-    """Candidates for the road lists from one shard's result, best first."""
+                panos: Optional[List[Optional[str]]] = None,
+                previous: Optional[List[Piece]] = None) -> Lists:
+    """Candidates for the road lists from one shard's result, best first.
+
+    A leap is measured from the newest date `previous` had anywhere on the
+    road, not just on that stretch. Google's lookup gives the panorama nearest
+    the point asked about, which can be an old one with newer imagery close by
+    (a road rebuilt on a new line, or drives on slightly different lines), and
+    sorting by the biggest leap picks out exactly those stretches.
+    """
     by_id = {s.id: s for s in segments}
+    newest_before = _newest_before(previous, by_id) if previous else {}
+    raised = 0  # stretches whose leap starts from a newer date elsewhere on the road
     oldest: Dict[Tuple[str, int], _Group] = {}
     leaps: Dict[Tuple[str, int, int], _Group] = {}
     updated: Dict[str, _Group] = {}
@@ -116,7 +144,13 @@ def shard_lists(pieces: List[Piece], segments: Iterable[Segment],
         if update == 0:
             group(covered, ident, ident, seg).add(seg, p, lat, lon, pano)
         else:
-            group(leaps, (ident, update, month), ident, seg).add(seg, p, lat, lon, pano)
+            start = max(update, newest_before.get(ident, 0))
+            raised += start > update
+            if start < month:
+                group(leaps, (ident, start, month), ident, seg).add(seg, p, lat, lon, pano)
+
+    if raised:
+        logger.info("Biggest leaps: %d stretches measured from a newer date elsewhere on their road", raised)
 
     def long_enough(groups):
         return [g for g in groups if g.metres >= MIN_LENGTH_M]

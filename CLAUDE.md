@@ -65,13 +65,21 @@ python3 -m pipeline.run audit    --area uk              # how much new imagery w
 
 ## Current state and open items (November 2026)
 
-- Live: the whole UK, published to R2 by the monthly Build map workflow (2nd of each month, 04:23 UTC). Page-only
+- Live: the whole UK, published to R2 by the monthly Build map workflow (scheduled daily at 04:23 UTC; builds once
+  a month, from the 2nd, if there's been no successful build since the 2nd). Page-only
   changes go live within a minute of reaching `main` via the Deploy page workflow. First full
   build 2026-10-23 took 14 h (60–104 min of lookups per shard). A refresh takes about 4 h (18–26 min per shard, of
   which 11–17 min refresh) since sentinels are really re-asked each build. Tiles are about 1.2 GB per version, the
   overview 3.0 MB (0.5 MB compressed), R2 total about 3.3 GB of the 10 GB free tier.
-- GitHub's scheduler skipped the 2 November 04:23 build entirely (no run, workflow still enabled); it was started by
-  hand. If a 2nd passes with no run, start one from the Actions tab.
+- GitHub's scheduler skipped the 2 November 04:23 build entirely (no run, no incident on githubstatus.com, workflow
+  still enabled); it was started by hand. Hence the daily schedule with a once-a-month guard. If no scheduled runs at
+  all appear in the Actions tab after a few days, the schedule itself isn't firing: one suspect is that the commits
+  adding the cron line were authored as Claude <noreply@anthropic.com>, not a GitHub account; a one-line edit of the
+  schedule by the owner on GitHub would rule that out.
+- Biggest leaps: Google's metadata lookup returns the nearest panorama, not the newest, so an old capture can date a
+  stretch when newer imagery is close by (Plane Tree Way, Woodstock showed 2008 → 2026 though Maps had June 2022).
+  Leaps are now measured from the newest date the previous result had anywhere on the road; the map itself can
+  still show an older date than Maps in such spots.
 - Cloud sessions can't download from Geofabrik (the proxy drops the connection), so real builds run on GitHub
   Actions. The site's Cloudflare zone blocks non-browser user agents (error 1010): send a browser User-Agent when
   checking it from scripts.

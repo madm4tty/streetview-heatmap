@@ -250,12 +250,15 @@ To size up an extract before sampling it (no API calls), run
 
 ### Monthly build (GitHub Actions)
 
-`.github/workflows/build-map.yml` runs at 04:23 UTC on the 2nd of each month, and from **Actions → Build map → Run
-workflow**:
+`.github/workflows/build-map.yml` is scheduled daily at 04:23 UTC, and can be run from **Actions → Build map → Run
+workflow**. A scheduled run builds only from the 2nd of the month, and only if there's been no successful build since
+the 2nd; otherwise it stops after a few seconds. GitHub's scheduler can skip a run without trace (it skipped the first
+monthly build, on 2 November 2026), so the next day's run picks it up, and the daily runs in the Actions tab show the
+schedule is alive. A run started by hand always builds.
 
-1. **prepare** downloads the UK extract once, keeps only highways (`osmium tags-filter`) and passes it on.
-   It also re-enables the workflow, because GitHub disables scheduled workflows in public repos after 60 days
-   without commits.
+1. **prepare** decides whether to build, then downloads the UK extract once (giving up on a stalled transfer and
+   retrying), keeps only highways (`osmium tags-filter`) and passes it on. It also re-enables the workflow, because
+   GitHub disables scheduled workflows in public repos after 60 days without commits.
 2. **shard** runs once per shard, one at a time so they share Google's 500 requests/s limit: `pull-state`,
    then `refresh` or `sample` (below), `push-state`, `tiles`. Lookups stop after 300 minutes, so the job saves
    its progress before the 6-hour limit.
