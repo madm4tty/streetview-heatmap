@@ -195,6 +195,45 @@
     background: var(--track); color: var(--panel-fg); vertical-align: 1px;
   }
 
+  /* About: a dialog over the map; a full-screen sheet on phones */
+  .head-btns { display: flex; gap: 2px; flex-shrink: 0; }
+  .head-btns .text-btn { padding: 6px 3px; }
+  .panel-head h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .about {
+    width: min(560px, calc(100% - 32px)); max-height: 85vh; padding: 0; overflow: auto;
+    background: var(--panel-bg); color: var(--panel-fg);
+    border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+  .about::backdrop { background: rgba(0, 0, 0, 0.4); }
+  .about-body { padding: 4px 22px 18px; line-height: 1.5; }
+  .about-head {
+    position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center;
+    background: var(--panel-bg); padding: 14px 22px 8px; border-bottom: 1px solid var(--border);
+  }
+  .about-head h2 { font-size: 17px; margin: 0; }
+  .about h3 { font-size: 14px; margin: 16px 0 4px; }
+  .about p { margin: 4px 0; }
+  .about ul { margin: 4px 0; padding-left: 20px; }
+  .about li { margin: 3px 0; }
+  .about a { color: var(--accent); }
+  /* A first visit's welcome, over the map */
+  .welcome {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 5;
+    width: min(380px, calc(100% - 32px)); box-sizing: border-box; padding: 12px 14px;
+    background: var(--panel-bg); color: var(--panel-fg);
+    border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  }
+  .welcome p { margin: 0 0 8px; }
+  .welcome-btns { display: flex; justify-content: flex-end; gap: 8px; }
+  .welcome-btns button {
+    font: inherit; font-size: 13px; border-radius: 6px; padding: 6px 12px; min-height: 32px; cursor: pointer;
+    border: 1px solid var(--border); background: none; color: inherit;
+  }
+  .welcome-btns .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  /* Open this view in Google Maps, among the map's own buttons */
+  .gmaps-link { display: flex; width: 29px; height: 29px; align-items: center; justify-content: center; color: #333; }
+  [data-theme="dark"] .gmaps-link { color: var(--panel-fg); }
+
   /* Phones: the panel becomes a drawer along the bottom, closed to start with */
   @media (max-width: 640px) {
     .panel {
@@ -206,6 +245,8 @@
     .toptens { left: 0; }
     /* Keep the attribution and scale clear of the closed drawer */
     .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { bottom: 52px; }
+    .about { width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; border-radius: 0; border: 0; }
+    .welcome { top: auto; bottom: 64px; }
   }
   @media (min-width: 641px) {
     .panel.closed #panel-body { display: none; }
@@ -214,10 +255,77 @@
 </head>
 <body>
 <div id="map"></div>
+<div class="welcome" id="welcome" role="region" aria-label="Welcome" hidden>
+  <p>This map shows how old Google Street View imagery is on every road in the UK: green is recent, red is old.</p>
+  <div class="welcome-btns">
+    <button type="button" id="welcome-ok">Got it</button>
+    <button type="button" class="primary" id="welcome-tour">Show me around</button>
+  </div>
+</div>
+<dialog class="about" id="about" aria-labelledby="about-title">
+  <div class="about-head">
+    <h2 id="about-title">About this map</h2>
+    <button class="text-btn" id="close-about" aria-label="Close">Close</button>
+  </div>
+  <div class="about-body">
+    <h3>What it shows</h3>
+    <p>How old the Google Street View imagery is along every road and path in the UK. Each stretch is coloured by
+      the month its photos were taken, from green (under six months old) to dark red (over ten years). The map is
+      checked against Google once a month.</p>
+
+    <h3>Reading the map</h3>
+    <ul>
+      <li>Zoomed out, hexagons show the typical (median) capture date of the roads inside them. Zoom in to see
+        individual roads.</li>
+      <li>Grey dashes: no Google imagery (people's own uploaded photos may still be there). Grey dots: private roads,
+        driveways and closed paths with no imagery, where the Street View car doesn't usually go.</li>
+      <li>The legend doubles as a summary of the area on screen: each row shows that age band's share of the road.
+        Tap a row to hide or show it.</li>
+    </ul>
+
+    <h3>Things to try</h3>
+    <ul>
+      <li>Tap a road to see when it was photographed, and open that exact panorama in Street View.</li>
+      <li>Search for a place, or use the locate button to see your area.</li>
+      <li>Highlight new imagery since the last update, or open "Latest update" to see where Google has been
+        driving.</li>
+      <li>Top tens: the oldest roads still waiting for an update, the biggest leaps forward and more.</li>
+      <li>The button below the locate button opens the same view in Google Maps.</li>
+      <li>Show only roads or major roads, switch to colour-blind safe colours, or choose a light or dark theme.</li>
+      <li>The address in your browser keeps your view and settings, so you can share exactly what you're looking
+        at.</li>
+    </ul>
+
+    <h3>How it's made</h3>
+    <p>Roads come from OpenStreetMap. Google's Street View metadata service is asked for the capture date at points
+      along each road, checking more closely wherever the date changes. Each month a sample point in every 250 m
+      square is checked again, and any road where something changed is checked in full.</p>
+
+    <h3>Good to know</h3>
+    <ul>
+      <li>Dates are the month the photos were taken, not when Google published them.</li>
+      <li>Points along a road can be up to 400 m apart, so a short stretch with a different date can be missed.</li>
+      <li>Google gives the panorama nearest each point, which is occasionally older than imagery a few metres away.
+        Google Maps' own "See more dates" shows everything at a spot.</li>
+      <li>Photos from Google's walking backpack count too, so some paths in parks have dates.</li>
+      <li>The monthly check can miss new imagery on roads it didn't look at directly; an occasional full re-check
+        catches up.</li>
+    </ul>
+
+    <h3>Credits</h3>
+    <p>Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap
+      contributors</a>, base map by <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>,
+      place search by <a href="https://photon.komoot.io" target="_blank" rel="noopener">Photon</a>. Imagery dates from
+      Google Street View. An independent project, not made or endorsed by Google.</p>
+  </div>
+</dialog>
 <aside class="panel" id="panel" aria-label="Legend and statistics">
   <div class="panel-head">
     <h1>Street View imagery age</h1>
-    <button class="text-btn" id="toggle-panel" aria-expanded="true" aria-controls="panel-body">Hide</button>
+    <span class="head-btns">
+      <button class="text-btn" id="open-about" aria-haspopup="dialog">About</button>
+      <button class="text-btn" id="toggle-panel" aria-expanded="true" aria-controls="panel-body">Hide</button>
+    </span>
   </div>
   <div id="panel-body">
     <form class="search" role="search" id="search">
@@ -365,9 +473,11 @@
   (function tidyHash() {
     const parts = location.hash.slice(1).split("&").filter(Boolean);
     const old = parts.find(kv => /^[\d.]+\/-?[\d.]+\/-?[\d.]+$/.test(kv.replace(/=$/, "")));
-    const kept = parts.filter(kv => kv.includes("=") && !kv.endsWith("="));
+    // "#about" alone is a link to the guide
+    const kept = parts.map(kv => (kv === "about" ? "about=1" : kv))
+      .filter(kv => kv.includes("=") && !kv.endsWith("="));
     if (old && !kept.some(kv => kv.startsWith("map="))) kept.unshift(`map=${old.replace(/=$/, "")}`);
-    if (kept.length !== parts.length || old) {
+    if (kept.join("&") !== parts.join("&") || old) {
       history.replaceState(null, "", kept.length ? `#${kept.join("&")}` : location.pathname + location.search);
     }
   })();
@@ -484,6 +594,36 @@
   });
   map.addControl(new maplibregl.NavigationControl(), "top-right");
   map.addControl(new maplibregl.GeolocateControl({ fitBoundsOptions: { maxZoom: 15 } }), "top-right");
+
+  // A link to the same view in Google Maps, kept up to date as the map moves.
+  // Google's zoom levels are one higher than MapLibre's for the same scale.
+  class GoogleMapsControl {
+    onAdd(m) {
+      this.box = document.createElement("div");
+      this.box.className = "maplibregl-ctrl maplibregl-ctrl-group";
+      const link = document.createElement("a");
+      link.className = "gmaps-link";
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.title = "Open this view in Google Maps";
+      link.setAttribute("aria-label", link.title);
+      link.innerHTML = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
+      const update = () => {
+        const { lat, lng } = m.getCenter();
+        const zoom = Math.min(21, Math.max(1, Math.round(m.getZoom() + 1)));
+        link.href = "https://www.google.com/maps/@?api=1&map_action=map" +
+          `&center=${lat.toFixed(6)},${lng.toFixed(6)}&zoom=${zoom}`;
+      };
+      m.on("moveend", update);
+      update();
+      this.box.append(link);
+      return this.box;
+    }
+    onRemove() { this.box.remove(); }
+  }
+  map.addControl(new GoogleMapsControl(), "top-right");
 
   let overview = null;        // the overview on show, or null if there isn't one
   let latestOverview = null;  // the latest update's overview
@@ -1219,6 +1359,35 @@
     const wanted = initial.get("top");
     if (wanted in TOP_LISTS) { topSelect.value = wanted; setTopOpen(true); }
   }
+
+  // --- About, and a first visit's welcome ---------------------------------------
+  const about = document.getElementById("about");
+  function openAbout() {
+    if (!about.open) about.showModal();
+    writeHash({ about: "1" });
+  }
+  about.addEventListener("close", () => writeHash({ about: null }));
+  // A click on the backdrop lands on the dialog itself, outside its content
+  about.addEventListener("click", e => { if (e.target === about) about.close(); });
+  document.getElementById("open-about").addEventListener("click", openAbout);
+  document.getElementById("close-about").addEventListener("click", () => about.close());
+  if (initial.get("about") === "1") openAbout();
+
+  // Shown once per device, and not to someone following a link to a particular
+  // view, or if storage is blocked (it would show on every visit)
+  (function welcome() {
+    let seen = true;
+    try { seen = localStorage.getItem("welcomed") === "1"; } catch (err) { /* storage blocked */ }
+    if (seen || initial.has("map") || initial.has("about")) return;
+    const card = document.getElementById("welcome");
+    const done = () => {
+      card.hidden = true;
+      try { localStorage.setItem("welcomed", "1"); } catch (err) { /* storage blocked */ }
+    };
+    card.hidden = false;
+    document.getElementById("welcome-ok").addEventListener("click", done);
+    document.getElementById("welcome-tour").addEventListener("click", () => { done(); openAbout(); });
+  })();
 
   // --- Popups ----------------------------------------------------------------
   function describeAge(months) {
