@@ -71,11 +71,12 @@ python3 -m pipeline.run audit    --area uk              # how much new imagery w
   build 2026-10-23 took 14 h (60–104 min of lookups per shard). A refresh takes about 4 h (18–26 min per shard, of
   which 11–17 min refresh) since sentinels are really re-asked each build. Tiles are about 1.2 GB per version, the
   overview 3.0 MB (0.5 MB compressed), R2 total about 3.3 GB of the 10 GB free tier.
-- GitHub's scheduler skipped the 2 November 04:23 build entirely (no run, no incident on githubstatus.com, workflow
-  still enabled); it was started by hand. Hence the daily schedule with a once-a-month guard. If no scheduled runs at
-  all appear in the Actions tab after a few days, the schedule itself isn't firing: one suspect is that the commits
-  adding the cron line were authored as Claude <noreply@anthropic.com>, not a GitHub account; a one-line edit of the
-  schedule by the owner on GitHub would rule that out.
+- GitHub starts this workflow's scheduled runs about 7.5–8 h late (2 Nov 12:37, 3 Nov 11:59, 4 Nov 12:13 for a
+  04:23 cron), so the monthly build really starts around midday on the 2nd. They run as the owner's account
+  (`madm4tty`), so the schedule is fine. The 2 November run arrived 8 h late, after a manual build, and then timed out
+  under the old 30-minute `prepare` limit on a stalled Geofabrik download; both are fixed (#45: download stall
+  detection and retries, 50-minute job; #46: daily schedule with a once-a-month guard, which also retries on the
+  next day after a failed or missing run). Daily runs that find the month built stop in about 9 seconds.
 - Biggest leaps: Google's metadata lookup returns the nearest panorama, not the newest, so an old capture can date a
   stretch when newer imagery is close by (Plane Tree Way, Woodstock showed 2008 → 2026 though Maps had June 2022).
   Leaps are now measured from the newest date the previous result had anywhere on the road; the map itself can

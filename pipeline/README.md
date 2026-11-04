@@ -259,9 +259,10 @@ To size up an extract before sampling it (no API calls), run
 
 `.github/workflows/build-map.yml` is scheduled daily at 04:23 UTC, and can be run from **Actions → Build map → Run
 workflow**. A scheduled run builds only from the 2nd of the month, and only if there's been no successful build since
-the 2nd; otherwise it stops after a few seconds. GitHub's scheduler can skip a run without trace (it skipped the first
-monthly build, on 2 November 2026), so the next day's run picks it up, and the daily runs in the Actions tab show the
-schedule is alive. A run started by hand always builds.
+the 2nd; otherwise it stops after a few seconds. GitHub starts scheduled runs late, for this workflow
+about 8 hours (so the monthly build really begins around midday), and on 2 November 2026 that late run then timed out
+on a stalled download; a failed or missing run is picked up by the next day's, and the daily runs in the Actions tab
+show the schedule is alive. A run started by hand always builds.
 
 1. **prepare** decides whether to build, then downloads the UK extract once (giving up on a stalled transfer and
    retrying), keeps only highways (`osmium tags-filter`) and passes it on. It also re-enables the workflow, because
